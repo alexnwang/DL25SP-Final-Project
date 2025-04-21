@@ -192,7 +192,86 @@ class JEPARecurrent(nn.Module):
         for p, p_tgt in zip(encoder.parameters(), target_encoder.parameters()):
             p_tgt.data = m * p_tgt.data + (1.0 - m) * p.data
     
-    
+    def train_jepa_recurrent(
+        self,
+        model,
+        train_loader,
+        num_epochs=20,
+        lr=1e-4,
+        device="cuda",
+        ema_momentum=0.99,
+        log_interval=100,
+    ):
+        model = model.to(device)
+        target_encoder = deepcopy(model.encoder)
+        target_encoder.eval()  # EMA target encoder is not trained
+        for p in target_encoder.parameters():
+            p.requires_grad = False
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
+
+        for epoch in range(num_epochs):
+            model.train()
+            total_loss = 0.0
+            steps = 0
+
+            for batch_idx, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}")):
+                obs_seq = batch.states.to(device)       # (B, T+1, 2, 64, 64)
+                action_seq = batch.actions.to(device)   # (B, T, 2)
+
+                loss = self.vicreg_loss_recurrent(model, target_encoder, obs_seq, action_seq)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                # EMA update for target encoder
+                self.update_momentum_encoder(model.encoder, target_encoder, m=ema_momentum)
+
+                total_loss += loss.item()
+                steps += 1
+
+                if batch_idx % log_interval == 0:
+                    print(f"[Epoch {epoch+1} | Step {batch_idx}] Loss: {loss.item():.4f}")
+
+            avg_loss = total_loss / steps
+            print(f"[Epoch {epoch+1}] Average Loss: {avg_loss:.4f}")
+
+            #check for collapse
+
+            with torch.no_grad():
+                pred_z = model(obs_seq[:, 0:1], action_seq)  # (B, T, D)
+                flat_z = pred_z.reshape(-1, pred_z.shape[-1])  # → (B×T, D)
+
+            means = flat_z.mean(dim=0)
+            stds = flat_z.std(dim=0)
+
+            print(f"[Epoch {epoch+1}] Mean: {means.mean().item():.4f}, "
+                f"Std (avg across dims): {stds.mean().item():.4f}, "
+                f"Min std: {stds.min().item():.4f}")
+            scheduler.step()
+        torch.save(model.state_dict(), "model.pt")
+
+    @torch.no_grad()
+    def validate_jepa(model, target_encoder, val_loader, loss_fn, device="cuda"):
+        model.eval()
+        total_loss = 0.0
+        num_batches = 0
+
+        for batch in val_loader:
+            obs_seq = batch.states.to(device)       # (B, T+1, 2, 64, 64)
+            action_seq = batch.actions.to(device)   # (B, T, 2)
+
+            loss = loss_fn(model, target_encoder, obs_seq, action_seq)
+            total_loss += loss.item()
+            num_batches += 1
+
+        avg_loss = total_loss / num_batches
+        print(f"[Validation] Avg Loss: {avg_loss:.4f}")
+        return avg_loss
+
+            
 
 
 
