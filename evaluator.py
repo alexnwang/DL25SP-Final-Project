@@ -112,10 +112,22 @@ class ProbingEvaluator:
             for batch in tqdm(dataset, desc="Probe prediction step"):
                 ################################################################################
                 # TODO: Forward pass through your model
-                init_states = batch.states[:, 0:1]  # BS, 1, C, H, W
-                pred_encs = model(states=init_states, actions=batch.actions)
-                pred_encs = pred_encs.transpose(0, 1)  # # BS, T, D --> T, BS, D
-
+                # Use sliding windows of the full sequence of states for prediction and pad to full length
+                seq_len = batch.states.size(1)
+                preds_list = []
+                for start in range(seq_len - model.num_hist + 1):
+                    hist_states = batch.states[:, start : start + model.num_hist]
+                    hist_actions = batch.actions[:, start : start + model.num_hist - 1]
+                    out = model(states=hist_states, actions=hist_actions)  # (B, num_hist, D)
+                    preds_list.append(out[:, -1, :])  # last history embedding as prediction
+                pred_encs = torch.stack(preds_list, dim=1)  # (B, T_pred, D)
+                # convert to time-major for prober: (T_pred, BS, D)
+                pred_encs = pred_encs.transpose(0, 1)
+                # pad to full sequence length
+                pad_len = seq_len - pred_encs.size(0)
+                if pad_len > 0:
+                    pad_tensor = torch.zeros(pad_len, pred_encs.size(1), pred_encs.size(2), device=pred_encs.device)
+                    pred_encs = torch.cat([pad_tensor, pred_encs], dim=0)
                 # Make sure pred_encs has shape (T, BS, D) at this point
                 ################################################################################
 
@@ -210,11 +222,22 @@ class ProbingEvaluator:
         for idx, batch in enumerate(tqdm(val_ds, desc="Eval probe pred")):
             ################################################################################
             # TODO: Forward pass through your model
-            init_states = batch.states[:, 0:1]  # BS, 1 C, H, W
-            pred_encs = model(states=init_states, actions=batch.actions)
-            # # BS, T, D --> T, BS, D
+            # Use sliding windows of the full sequence of states for prediction and pad to full length
+            seq_len = batch.states.size(1)
+            preds_list = []
+            for start in range(seq_len - model.num_hist + 1):
+                hist_states = batch.states[:, start : start + model.num_hist]
+                hist_actions = batch.actions[:, start : start + model.num_hist - 1]
+                out = model(states=hist_states, actions=hist_actions)  # (B, num_hist, D)
+                preds_list.append(out[:, -1, :])  # last history embedding as prediction
+            pred_encs = torch.stack(preds_list, dim=1)  # (B, T_pred, D)
+            # time-major: (T_pred, BS, D)
             pred_encs = pred_encs.transpose(0, 1)
-
+            # pad to full sequence length
+            pad_len = seq_len - pred_encs.size(0)
+            if pad_len > 0:
+                pad_tensor = torch.zeros(pad_len, pred_encs.size(1), pred_encs.size(2), device=pred_encs.device)
+                pred_encs = torch.cat([pad_tensor, pred_encs], dim=0)
             # Make sure pred_encs has shape (T, BS, D) at this point
             ################################################################################
 
