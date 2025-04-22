@@ -4,6 +4,12 @@ from torch import nn
 from torch.nn import functional as F
 import torch
 
+# expose JEPAWrapper from the training script
+try:
+    from train_jepa import JEPAWrapper
+except ImportError:
+    JEPAWrapper = None
+
 
 def build_mlp(layers_dims: List[int]):
     layers = []
