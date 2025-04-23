@@ -48,8 +48,8 @@ def load_data(device):
 def load_model(device, args):
     """Load JEPAWrapper from checkpoint and instantiate with provided args."""
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    # infer action_emb_dim from action_encoder Linear weight: [action_emb_dim, 2]
-    action_emb_dim = checkpoint['action_encoder.0.weight'].shape[0]
+    # infer action_emb_dim from action_encoder conv weight: [out_channels, in_channels, kernel_size]
+    action_emb_dim = checkpoint['action_encoder.weight'].shape[0]
     # instantiate JEPAWrapper with training hyperparameters
     model = JEPAWrapper(
         encoder_name=args.encoder_name,
@@ -99,8 +99,8 @@ if __name__ == "__main__":
     parser.add_argument("--feature-key", type=str, default="x_norm_patchtokens", choices=["x_norm_patchtokens","x_norm_clstoken"], help="encoder feature key used in training")
     parser.add_argument("--num-hist", type=int, default=16, help="history length used in training")
     parser.add_argument("--predictor-depth", type=int, default=2, help="number of transformer layers in predictor")
-    parser.add_argument("--predictor-heads", type=int, default=4, help="number of attention heads in predictor")
-    parser.add_argument("--predictor-dim-head", type=int, default=32, help="dimensionality of each attention head in predictor")
+    parser.add_argument("--predictor-heads", type=int, default=2, help="number of attention heads in predictor")
+    parser.add_argument("--predictor-dim-head", type=int, default=16, help="dimensionality of each attention head in predictor")
     parser.add_argument("--predictor-mlp-dim", type=int, default=512, help="MLP hidden dimension in predictor")
     parser.add_argument("--predictor-dropout", type=float, default=0.0, help="dropout rate in predictor transformer")
     parser.add_argument("--predictor-emb-dropout", type=float, default=0.0, help="dropout on predictor input embeddings")

@@ -189,17 +189,15 @@ class JEPAWrapper(nn.Module):
         self.encoder.eval()
         # record representation dimension
         self.repr_dim = self.encoder.emb_dim
-        # action encoder
-        self.action_encoder = nn.Sequential(
-            nn.Linear(2, action_emb_dim),
-            nn.ReLU(inplace=True),
-        ).to(self.device)
-        # predictor: ViT-based transformer on patch tokens
+        # action encoder: 1D conv mapping 2D actions to repr_dim per frame
+        self.action_encoder = nn.Conv1d(in_channels=2, out_channels=self.repr_dim, kernel_size=1, stride=1).to(self.device)
         # compute number of patches per frame (assume 224x224 input)
         num_side = 224 // self.encoder.patch_size
         num_patches = num_side * num_side
+        self.num_patches = num_patches
+        extended_patches = num_patches + 1
         self.predictor = ViTPredictor(
-            num_patches=num_patches,
+            num_patches=extended_patches,
             num_frames=num_hist,
             dim=self.repr_dim,
             depth=pred_depth,
@@ -216,11 +214,12 @@ class JEPAWrapper(nn.Module):
         """
         Args:
             states: (B, num_hist, C, H, W) history frames
-            actions: (B, T-1, 2) actions (unused)
+            actions: (B, T-1, 2) actions
         Returns:
             pred_reprs: (B, num_hist, repr_dim)
         """
         states = states.to(self.device)
+        acts = actions.to(self.device)
         B, T, C, H, W = states.shape
         # embed each frame into patch tokens
         x = states.reshape(-1, C, H, W)
@@ -237,24 +236,34 @@ class JEPAWrapper(nn.Module):
         x = (x - mean) / std
         with torch.no_grad():
             emb = self.encoder(x)  # (B*T, num_patches, repr_dim)
-        num_patches = emb.size(1)
-        emb = emb.view(B, T, num_patches, self.repr_dim)
-        # flatten time and patch dims
-        inp = rearrange(emb, 'b t p d -> b (t p) d')
-        # apply ViT predictor; fallback to mean-pooled repr on OOM
+        # reshape to (B, T, num_patches, repr_dim)
+        emb = emb.view(B, T, self.num_patches, self.repr_dim)
+        # embed actions into repr_dim per frame using 1D conv
+        # acts: (B, T-1, 2)
+        act_seq = acts.permute(0, 2, 1)  # (B, 2, T-1)
+        act_seq_emb = self.action_encoder(act_seq)  # (B, repr_dim, T-1)
+        # pad dummy action for last frame
+        pad = torch.zeros(B, self.repr_dim, 1, device=self.device)
+        act_seq_emb = torch.cat([act_seq_emb, pad], dim=2)  # (B, repr_dim, T)
+        act_emb = act_seq_emb.permute(0, 2, 1).unsqueeze(2)  # (B, T, 1, repr_dim)
+        # concatenate visual patches with action tokens
+        z = torch.cat([emb, act_emb], dim=2)  # (B, T, num_patches+1, repr_dim)
+        # flatten time and token dims
+        inp = rearrange(z, 'b t p d -> b (t p) d')
+        # apply ViT predictor; fallback on OOM
         try:
-            out = self.predictor(inp)  # (B, T*num_patches, repr_dim)
+            out = self.predictor(inp)
         except RuntimeError as e:
             if 'out of memory' in str(e):
                 torch.cuda.empty_cache()
-                # fallback: collapse spatial tokens directly
-                reprs = emb.mean(dim=2)  # (B, T, repr_dim)
+                reprs = emb.mean(dim=2)
                 return reprs
             else:
                 raise
-        out = out.view(B, T, num_patches, self.repr_dim)
-        # mean-pool spatial tokens per frame
-        reprs = out.mean(dim=2)  # (B, T, repr_dim)
+        # reshape back to (B, T, num_patches+1, repr_dim)
+        out = out.view(B, T, self.num_patches+1, self.repr_dim)
+        # mean-pool only visual tokens per frame
+        reprs = out[:, :, :self.num_patches, :].mean(dim=2)
         return reprs
 
 # ============================================================================
@@ -330,8 +339,8 @@ def main():
     parser.add_argument("--encoder-name", type=str, default="dinov2_vits14", help="DINO-V2 encoder variant (dinov2_vits14, etc)")
     parser.add_argument("--feature-key", type=str, default="x_norm_patchtokens", choices=["x_norm_patchtokens","x_norm_clstoken"], help="encoder output feature key")
     parser.add_argument("--predictor-depth", type=int, default=2, help="number of transformer layers in predictor")
-    parser.add_argument("--predictor-heads", type=int, default=4, help="number of attention heads in predictor")
-    parser.add_argument("--predictor-dim-head", type=int, default=32, help="dimensionality of each attention head in predictor")
+    parser.add_argument("--predictor-heads", type=int, default=2, help="number of attention heads in predictor")
+    parser.add_argument("--predictor-dim-head", type=int, default=16, help="dimensionality of each attention head in predictor")
     parser.add_argument("--predictor-mlp-dim", type=int, default=512, help="MLP hidden dimension in predictor")
     parser.add_argument("--predictor-dropout", type=float, default=0.0, help="dropout rate in predictor transformer")
     parser.add_argument("--predictor-emb-dropout", type=float, default=0.0, help="dropout on predictor input embeddings")
@@ -405,7 +414,8 @@ def main():
             B, W, C, H, Wp = imgs.shape
             # use history frames for ViTPredictor
             hist = imgs[:, :args.num_hist].to(device)  # (B, num_hist, 3, H, W)
-            acts = acts.to(device)
+            # slice actions to only include transitions between history frames
+            acts = acts[:, :args.num_hist - 1].to(device)
             preds = model(hist, acts)  # (B, num_hist, repr_dim)
             # compute target embeddings for history frames [1:]
             frames = hist[:, 1:].reshape(-1, C, H, Wp).to(device)
