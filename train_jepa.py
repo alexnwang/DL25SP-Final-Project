@@ -251,15 +251,7 @@ class JEPAWrapper(nn.Module):
         # flatten time and token dims
         inp = rearrange(z, 'b t p d -> b (t p) d')
         # apply ViT predictor; fallback on OOM
-        try:
-            out = self.predictor(inp)
-        except RuntimeError as e:
-            if 'out of memory' in str(e):
-                torch.cuda.empty_cache()
-                reprs = emb.mean(dim=2)
-                return reprs
-            else:
-                raise
+        out = self.predictor(inp)
         # reshape back to (B, T, num_patches+1, repr_dim)
         out = out.view(B, T, self.num_patches+1, self.repr_dim)
         # mean-pool only visual tokens per frame
@@ -331,10 +323,10 @@ def main():
         "--data-dir", type=str, default="/gpfs/scratch/wz1492/data/train"
     )
     parser.add_argument("--epochs", type=int, default=1, help="number of epochs to train")
-    parser.add_argument("--batch-size", type=int, default=16, help="training batch size")
+    parser.add_argument("--batch-size", type=int, default=32, help="training batch size")
     parser.add_argument("--num-hist", type=int, default=16, help="history frames for JEPA prediction")
     parser.add_argument("--num-pred", type=int, default=1, help="number of prediction frames (unused currently)")
-    parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
+    parser.add_argument("--lr", type=float, default=2e-3, help="learning rate")
     parser.add_argument("--action-emb-dim", type=int, default=4, help="dimension of action embeddings")
     parser.add_argument("--encoder-name", type=str, default="dinov2_vits14", help="DINO-V2 encoder variant (dinov2_vits14, etc)")
     parser.add_argument("--feature-key", type=str, default="x_norm_patchtokens", choices=["x_norm_patchtokens","x_norm_clstoken"], help="encoder output feature key")
@@ -346,9 +338,10 @@ def main():
     parser.add_argument("--predictor-emb-dropout", type=float, default=0.0, help="dropout on predictor input embeddings")
     parser.add_argument("--predictor-pool", type=str, default="mean", choices=["cls","mean"], help="pooling strategy for predictor output")
     parser.add_argument(
-        "--save-path", type=str, default="jepa_model_small_16hist.pth"
+        "--save-path", type=str, default="jepa_model_small_16hist_no_teacher_forcing.pth"
     )
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--no-teacher-forcing", action="store_true", help="Disable teacher forcing (predict current frame instead of next)")
     args = parser.parse_args()
 
     # transforms for DINO-V2
@@ -405,6 +398,10 @@ def main():
 
     # training
     model.train()
+    teacher_forcing = not args.no_teacher_forcing
+    target_start_idx = 1 if teacher_forcing else 0
+    pred_start_idx = 1 if teacher_forcing else 0
+
     for epoch in range(1, args.epochs + 1):
         total_loss = 0.0
         # iterate with progress bar per epoch
@@ -415,25 +412,41 @@ def main():
             # use history frames for ViTPredictor
             hist = imgs[:, :args.num_hist].to(device)  # (B, num_hist, 3, H, W)
             # slice actions to only include transitions between history frames
-            acts = acts[:, :args.num_hist - 1].to(device)
-            preds = model(hist, acts)  # (B, num_hist, repr_dim)
-            # compute target embeddings for history frames [1:]
-            frames = hist[:, 1:].reshape(-1, C, H, Wp).to(device)
-            if frames.shape[1] == 2:
-                frames = torch.cat([frames, frames[:, 0:1]], dim=1)
-            elif frames.shape[1] == 1:
-                frames = frames.repeat(1, 3, 1, 1)
-            frames = F.interpolate(frames, size=(224, 224), mode='bilinear', align_corners=False)
+            # Action sequence length should match predictor input length (num_hist)
+            # Needs T-1 actions for T frames. If num_hist=16, need 15 actions.
+            acts_hist = acts[:, :args.num_hist - 1].to(device)
+            preds = model(hist, acts_hist)  # (B, num_hist, repr_dim)
+
+            # Compute target embeddings based on teacher_forcing flag
+            target_frames = hist[:, target_start_idx:].reshape(-1, C, H, Wp).to(device)
+            if target_frames.shape[0] == 0: # Handle edge case if num_hist=1 and teacher_forcing=True
+                continue
+
+            # Preprocess target frames
+            if target_frames.shape[1] == 2:
+                target_frames = torch.cat([target_frames, target_frames[:, 0:1]], dim=1)
+            elif target_frames.shape[1] == 1:
+                target_frames = target_frames.repeat(1, 3, 1, 1)
+            target_frames = F.interpolate(target_frames, size=(224, 224), mode='bilinear', align_corners=False)
             mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
             std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
-            frames = (frames - mean) / std
+            target_frames = (target_frames - mean) / std
+
+            # Get target embeddings from frozen encoder
             with torch.no_grad():
-                emb = model.encoder(frames)  # (B*(num_hist-1), num_patches, repr_dim)
-                targ = emb.mean(dim=1)  # (B*(num_hist-1), repr_dim)
-            targ = targ.view(B, args.num_hist - 1, model.repr_dim)
-            pr = preds[:, 1:]  # (B, num_hist-1, repr_dim)
-            # compute MSE on history steps
-            loss = F.mse_loss(pr, targ)
+                emb = model.encoder(target_frames)  # (B*(num_hist-target_start_idx), num_patches, repr_dim)
+                targ = emb.mean(dim=1)  # (B*(num_hist-target_start_idx), repr_dim)
+
+            # Reshape targets
+            target_dim = args.num_hist - target_start_idx
+            targ = targ.view(B, target_dim, model.repr_dim)
+
+            # Slice predictions
+            pr = preds[:, pred_start_idx:]  # (B, num_hist - pred_start_idx, repr_dim)
+
+            # Compute VICReg loss
+            loss = vicreg_loss(pr, targ)
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -446,6 +459,33 @@ def main():
     # save final model
     torch.save(model.state_dict(), args.save_path)
     print(f"Saved JEPA model to {args.save_path}")
+
+# Add VICReg loss function
+def vicreg_loss(x, y, sim_coeff=25.0, var_coeff=25.0, cov_coeff=1.0, eps=1e-4):
+    """
+    Compute VICReg loss between representations x and y.
+    """
+    import torch
+    x = x.reshape(-1, x.size(-1))
+    y = y.reshape(-1, y.size(-1))
+    # Invariance term (MSE)
+    invariance_loss = F.mse_loss(x, y)
+    # Variance term
+    def variance_loss(z):
+        z = z - z.mean(dim=0)
+        std = torch.sqrt(z.var(dim=0) + eps)
+        return torch.mean(F.relu(1 - std))
+    var_loss = (variance_loss(x) + variance_loss(y)) / 2
+    # Covariance term
+    def covariance_loss(z):
+        z = z - z.mean(dim=0)
+        N, D = z.shape
+        cov = (z.T @ z) / (N - 1)
+        diag = torch.diag(cov)
+        cov = cov - torch.diag(diag)
+        return cov.pow(2).sum() / D
+    cov_loss = (covariance_loss(x) + covariance_loss(y)) / 2
+    return sim_coeff * invariance_loss + var_coeff * var_loss + cov_coeff * cov_loss
 
 if __name__ == "__main__":
     main() 
