@@ -278,9 +278,11 @@ class JEPAWrapper(nn.Module):
     # --- NEW -----------------------------------------------------------------
     def rollout(self,
         init_frame: torch.Tensor,      # (B,1,3,H,W)
-        actions:    torch.Tensor):     # (B,T-1,2)
+        actions:    torch.Tensor,      # (B,T-1,2)
+        truth_embeddings: torch.Tensor = None,  # (B,T,num_patches,embed_dim)
+        sched_sample_prob: float = 1.0):         # probability of using model's prediction instead of ground truth
         """
-        Autoregressively predicts embeddings for all future steps.
+        Autoregressively predicts embeddings for all future steps with optional scheduled sampling.
         Returns: (B, T, num_patches, embed_dim) – the first slice (t=0)
                  is just the encoded init_frame.
         """
@@ -300,23 +302,35 @@ class JEPAWrapper(nn.Module):
         latent_t = self._encode_frames(frame0)                     # (B,P,D)
         latents  = [latent_t]                                      # list of (B,P,D)
 
-        # -- step through actions ---------------------------------------------
+        # -- step through actions with scheduled sampling --------------------
         for step in range(Tm1):
-            # 1 embed action_t  → shape (B,1,1,embed_dim)
-            a = actions[:,step:step+1].permute(0,2,1)              # (B,2,1)
-            a_emb = self.action_encoder(a)                         # (B,D0,1)
-            zeros = torch.zeros(B, 2, 1, device=device)            # coords = 0
-            a_emb = torch.cat([a_emb, zeros], dim=1)               # (B,D,1)
-            a_emb = a_emb.permute(0,2,1).unsqueeze(2)              # (B,1,1,D)
+            # Scheduled sampling: decide whether to use predicted latent or ground truth
+            if truth_embeddings is not None:
+                truth_latent = truth_embeddings[:, step]  # (B,num_patches,embed_dim)
+                if sched_sample_prob < 1.0:
+                    rand = torch.rand(B, device=device)
+                    mask = (rand < sched_sample_prob).view(B,1,1)  # (B,1,1)
+                    latent_input = latent_t * mask + truth_latent * (~mask)
+                else:
+                    latent_input = latent_t
+            else:
+                latent_input = latent_t
+
+            # 1 embed action_t → shape (B,1,1,embed_dim)
+            a = actions[:,step:step+1].permute(0,2,1)               # (B,2,1)
+            a_emb = self.action_encoder(a)                          # (B,D0,1)
+            zeros = torch.zeros(B, 2, 1, device=device)             # coords = 0
+            a_emb = torch.cat([a_emb, zeros], dim=1)                # (B,D,1)
+            a_emb = a_emb.permute(0,2,1).unsqueeze(2)               # (B,1,1,D)
 
             # 2 concatenate "current latent patches" with that action token
-            token_in = torch.cat([latent_t.unsqueeze(1), a_emb], dim=2)   # (B,1,P+1,D)
-            flat_in  = rearrange(token_in, 'b t p d -> b (t p) d')        # (B,(P+1),D)
+            token_in = torch.cat([latent_input.unsqueeze(1), a_emb], dim=2)  # (B,1,num_patches+1,embed_dim)
+            flat_in  = rearrange(token_in, 'b t p d -> b (t p) d')           # (B,(num_patches+1),embed_dim)
 
-            # 3 one transformer pass   (causal mask inside Attention keeps order)
-            out = self.predictor(flat_in)                                 # (B,(P+1),D)
-            out = out.view(B, 1, self.num_patches+1, self.embed_dim)      # (B,1,P+1,D)
-            latent_t = out[:,0,:self.num_patches]                         # (B,P,D)
+            # 3 one transformer pass (causal mask inside Attention keeps order)
+            out = self.predictor(flat_in)                                   # (B,(num_patches+1),embed_dim)
+            out = out.view(B, 1, self.num_patches+1, self.embed_dim)        # (B,1,num_patches+1,embed_dim)
+            latent_t = out[:,0,:self.num_patches]                           # (B,num_patches,embed_dim)
 
             latents.append(latent_t)
 
@@ -407,6 +421,7 @@ def main():
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--no-teacher-forcing", action="store_true", help="Disable teacher forcing (predict current frame instead of next)")
     parser.add_argument("--vicreg", action="store_true", help="Use VICReg loss")
+    parser.add_argument("--sched-sample-prob", type=float, default=1.0, help="Scheduled sampling: probability of using model prediction instead of ground truth for next input")
     args = parser.parse_args()
 
     # transforms for DINO-V2
@@ -465,21 +480,22 @@ def main():
         pbar = tqdm(loader, desc=f"Epoch {epoch}/{args.epochs}")
         for imgs, acts in pbar:
             B, T, C, H, W = imgs.shape
-            # -----  encode only frame-0  --------------------------------------------
-            init = imgs[:, :1].to(device)        # (B,1,3,H,W)
-            preds = model.rollout(init, acts.to(device))      # (B,T,P,D)
-
-            # -----  ground-truth embeddings for t=0…T-1 ------------------------------
+            # -----  ground-truth embeddings for t=0…T-1 -----------------------------
             with torch.no_grad():
                 all_frames = F.interpolate(imgs.reshape(-1,3,H,W).to(device), 224,
                                            mode='bilinear', align_corners=False)
                 all_frames = (all_frames - model.rgb_mean) / model.rgb_std
-                truth = model._encode_frames(all_frames)               # (B*T,P,D)
-            truth = truth.view(B, -1, model.num_patches, model.embed_dim)  # (B,T,P,embed_dim)
+                truth_all = model._encode_frames(all_frames)        # (B*T,P,D)
+            truth = truth_all.view(B, T, model.num_patches, model.embed_dim)  # (B,T,num_patches,embed_dim)
 
-            # -----  drop t=0 from loss (we never predict frame-0) -------------------
-            pred = preds[:,1:]     # (B,T-1,P,D)
-            gold = truth[:,1:]     # (B,T-1,P,D)
+            # -----  initial frame for rollout ---------------------------------------
+            init = imgs[:, :1].to(device)          # (B,1,3,H,W)
+            # -----  scheduled sampling rollout -------------------------------------
+            preds = model.rollout(init, acts.to(device), truth, args.sched_sample_prob)  # (B,T,num_patches,embed_dim)
+
+            # -----  drop t=0 from loss (we never predict frame-0) --------------------
+            pred = preds[:,1:]    # (B,T-1,num_patches,embed_dim)
+            gold = truth[:,1:]    # (B,T-1,num_patches,embed_dim)
             if args.vicreg:
                 loss = vicreg_loss(pred, gold)
             else:
