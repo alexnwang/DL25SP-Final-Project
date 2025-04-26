@@ -9,7 +9,7 @@ class VICRegLoss(nn.Module):
     def __init__(
         self,
         inv_coeff: float = 25.0,
-        var_coeff: float = 15.0,
+        var_coeff: float = 25.0,
         cov_coeff: float = 1.0,
         gamma: float = 1.0,
     ):
@@ -18,14 +18,6 @@ class VICRegLoss(nn.Module):
         self.var_coeff = var_coeff
         self.cov_coeff = cov_coeff
         self.gamma = gamma
-
-        print("-" * 50)
-        print(f"VICReg Loss initialized with:")
-        print(f"  - Invariance coefficient: {inv_coeff}")
-        print(f"  - Variance coefficient: {var_coeff}")
-        print(f"  - Covariance coefficient: {cov_coeff}")
-        print(f"  - Variance threshold: {gamma}")
-        print("-" * 50)
 
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Computes the VICReg loss.
@@ -53,7 +45,7 @@ class VICRegLoss(nn.Module):
             self.cov_coeff * (self.covariance_loss(x) + self.covariance_loss(y)) / 2
         )
         metrics["loss"] = sum(metrics.values())
-        return metrics["loss"], metrics["inv-loss"], metrics["var-loss"], metrics["cov-loss"]
+        return metrics
 
     @staticmethod
     def representation_loss(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:

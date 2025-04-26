@@ -29,13 +29,13 @@ class WallDataset:
         return len(self.states)
 
     def __getitem__(self, i):
-        states = torch.from_numpy(self.states[i]).float().to(self.device)
-        actions = torch.from_numpy(self.actions[i]).float().to(self.device)
+        states = torch.from_numpy(self.states[i].copy()).float()
+        actions = torch.from_numpy(self.actions[i]).float()
 
         if self.locations is not None:
-            locations = torch.from_numpy(self.locations[i]).float().to(self.device)
+            locations = torch.from_numpy(self.locations[i]).float()
         else:
-            locations = torch.empty(0).to(self.device)
+            locations = torch.empty(0)
 
         return WallSample(states=states, locations=locations, actions=actions)
 

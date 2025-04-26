@@ -1,7 +1,8 @@
 from dataset import create_wall_dataloader
 from evaluator import ProbingEvaluator
 import torch
-from models import MockModel
+from models import MockModel, JEPA_SplitEncoder_VICReg, JEPA_SplitEncoder_CombinedLossNoPool
+from configs import ConfigSplitJEPA
 import glob
 
 
@@ -13,7 +14,7 @@ def get_device():
 
 
 def load_data(device):
-    data_path = "/scratch/DL25SP"
+    data_path = "/media/lucas/T7/scratch/DL25SP"
 
     probe_train_ds = create_wall_dataloader(
         data_path=f"{data_path}/probe_normal/train",
@@ -47,7 +48,16 @@ def load_data(device):
 def load_model():
     """Load or initialize the model."""
     # TODO: Replace MockModel with your trained model
-    model = MockModel()
+    # model = MockModel()
+    config = ConfigSplitJEPA()
+    # model = JEPA_SplitEncoder_VICReg(config)
+    model = JEPA_SplitEncoder_CombinedLossNoPool(config)
+
+    # "weights/long/JEPA_SplitEncoder_VICReg_epoch39_trainloss_4.88470561190169_valloss_0.03454339351238949.pt"
+    state_dict = torch.load("weights/JEPA_SplitEncoder_CombinedLossNoPool_epoch4_trainloss_7.458120383401782_valloss_0.04776226654648781.pt", map_location="cuda")
+    model.load_state_dict(state_dict)
+
+    model.to("cuda")
     return model
 
 

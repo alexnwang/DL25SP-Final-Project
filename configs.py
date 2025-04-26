@@ -47,3 +47,17 @@ class ConfigBase:
     def save(self, path: str):
         with open(path, "w") as f:
             OmegaConf.save(config=self, f=f)
+
+
+
+@dataclass
+class ConfigSplitJEPA(ConfigBase):
+    in_c: int = 2
+    out_c: int = 128 # 64
+    action_dim: int = 2
+    batch_size: int = 512
+    epochs: int = 5 # 50
+    lr: float = 0.002 # 1e-3
+    weight_decay: float = 1e-4
+    steps_per_epoch: int = 999
+    data_path: str = "/media/lucas/T7/scratch/DL25SP/train"

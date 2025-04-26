@@ -38,6 +38,7 @@ default_config = ProbingConfig()
 
 
 def location_losses(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    # print(f"\n\npred.shape = ", pred.shape, " -- target.shape = ", target.shape, "\n\n")
     assert pred.shape == target.shape
     mse = (pred - target).pow(2).mean(dim=0)
     return mse
@@ -151,6 +152,11 @@ class ProbingEvaluator:
 
                     pred_encs = sampled_pred_encs
                     target = sampled_target_locs.cuda()
+
+                # print(f"[DEBUG] pred_encs.shape: {pred_encs.shape}")   # (T, B, D)
+                # print(f"[DEBUG] Example pred_encs[0] shape: {pred_encs[0].shape}")   # (B, D)
+                # print(f"[DEBUG] Prober expects input_dim: {prober.prober[0].in_features}")
+
 
                 pred_locs = torch.stack([prober(x) for x in pred_encs], dim=1)
                 losses = location_losses(pred_locs, target)

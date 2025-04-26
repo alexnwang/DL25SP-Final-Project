@@ -3,12 +3,7 @@ import numpy as np
 from torch import nn
 from torch.nn import functional as F
 import torch
-import timm
 from loss import VICRegLoss
-from utilsls import get_optimizer, get_scheduler 
-import math 
-
-vicreg_loss = VICRegLoss()
 
 
 def build_mlp(layers_dims: List[int]):
@@ -72,282 +67,620 @@ class Prober(torch.nn.Module):
     def forward(self, e):
         output = self.prober(e)
         return output
-    
-# JEPA ARCH 
+
+
+
+
+
 
 class BaseModel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
 
-    def forward(self, *args, **kwargs):
-        raise NotImplementedError
 
-    def training_step(self, batch):
-        raise NotImplementedError
 
-    def validation_step(self, batch):
-        raise NotImplementedError
-    
-# using pretrained ViT as our encoder 
-class DinoV2ViTEncoder(nn.Module):
-    """
-    ViT-B/14 (DINO-v2) adapted for 2-channel 64x64 inputs.
-
-    Output:  feature map  [B, out_c, 5, 5]
-             (because 70x70xpad  ÷ patch-size 14  → 5x5 tokens)
-    """
-    def __init__(self, config):
+class ResBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride):
         super().__init__()
+        self.same_channels = in_channels == out_channels
 
-        # --- load DINO‑v2 ViT‑B/14 backbone ----------------------------
-        ckpt = "vit_base_patch14_dinov2.lvd142m"
-        self.vit = timm.create_model(
-            ckpt, pretrained=True,
-            num_classes=0,      # no classifier head
-            global_pool='',     # keep token grid
-            in_chans=3)         # will convert to 2 below
-        # ----------------------------------------------------------------
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
 
-        # --- convert patch embed conv from 3‑ch to 2‑ch -----------------
-        pe_old = self.vit.patch_embed.proj          # Conv2d(3,768,14,14)
-        w = pe_old.weight.data                 # [768,3,14,14]
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
 
-        pe_new = nn.Conv2d(
-            in_channels=2, out_channels=w.size(0),
-            kernel_size=pe_old.kernel_size,
-            stride=pe_old.stride, padding=pe_old.padding, bias=False)
+        if not self.same_channels or stride != 1:
+            self.skip = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride)
+        else:
+            self.skip = nn.Identity()
 
-        with torch.no_grad():
-            # copy first two RGB filters and rescale to preserve variance
-            pe_new.weight[:] = w[:, :2] * (3.0 / 2.0)
-        self.vit.patch_embed.proj = pe_new
-        # ----------------------------------------------------------------
+    def forward(self, x):
+        identity = self.skip(x)
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        return F.relu(out + identity)
 
-        self.patch_size   = self.vit.patch_embed.patch_size[0]   # 14
-        self.out_c        = config.out_c                        # latent channels
-        self.channel_proj = nn.Conv2d(
-            in_channels=self.vit.embed_dim,  # 768
-            out_channels=self.out_c, kernel_size=1)
 
-    # --------------------------------------------------------------------
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Parameters
-        ----------
-        x : Tensor  [B*, 2, 64, 64]   (agent + wall)
-
-        Returns
-        -------
-        feats : Tensor  [B*, out_c, 5, 5]
-        """
-        # amount of padding needed on H and W to reach multiple of 14
-        ph = (self.patch_size - x.size(-2) % self.patch_size) % self.patch_size
-        pw = (self.patch_size - x.size(-1) % self.patch_size) % self.patch_size
-        # pad bottom/right; order = (left, right, top, bottom)
-        x = F.pad(x, (0, pw, 0, ph))               # 64×64 → 70×70
-
-        tokens = self.vit.patch_embed(x)           # [B, 768, 5, 5]
-        feats  = self.channel_proj(tokens)         # [B, out_c, 5, 5]
-        return feats
-    
-
-class ViTPredictor2D(nn.Module):
-    """
-    Predictor for a 5×5 latent map produced by DinoV2ViTEncoder.
-
-    1. Projects (Δx, Δy) into a 5×5 mask.
-    2. Concatenates with current state map  →  channels = (out_c + 1)
-    3. Two depth‑wise‑friendly 3×3 convs   →  next‑state map.
-    """
-    def __init__(self, config):
+class ResEncoder2D(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.out_c      = config.out_c           # e.g. 1
-        self.action_dim = config.action_dim      # 2
-        self.side       = 5                      # 70÷14
-
-        # (1) action → mask
-        self.action_proj = nn.Linear(self.action_dim,
-                                     self.side * self.side)
-
-        # (2) φ(state, action)  →  next‑state
-        hidden_c = max(8, self.out_c * 4)        # tiny but expressive
-        self.net = nn.Sequential(
-            nn.Conv2d(self.out_c + 1, hidden_c, 3, padding=1, groups=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_c, self.out_c, 3, padding=1))
-
-        # small weight init so predictor starts close to identity
-        for m in self.net:
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-
-    def forward(self, s_map, action):
-        """
-        Parameters
-        ----------
-        s_map  : [B, out_c, 5, 5]   - current latent map
-        action : [B, 2]             - (DeltaX, DeltaY) in grid units
-
-        Returns
-        -------
-        next_s : [B, out_c, 5, 5]   - predicted next latent map
-        """
-        B = action.size(0)
-        a_mask = (self.action_proj(action)          # [B, 25]
-                  .view(B, 1, self.side, self.side))# [B, 1, 5, 5]
-
-        x = torch.cat([s_map, a_mask], dim=1)       # [B, out_c+1, 5, 5]
-        next_s = self.net(x)                        # [B, out_c, 5, 5]
-        return next_s
-class ActionRegularizer2D(nn.Module):
-    def __init__(self, config, embed_dim, action_dim):
-        super().__init__()
-        self.output_side = int(
-            math.sqrt(embed_dim)
-        )  # Calculate the side of the 2D embedding
-        self.action_reg_net = nn.Sequential(
-            nn.Conv2d(config.out_c, 16, kernel_size=3, padding=1),  # 2D conv layer
-            nn.ReLU(),
-            nn.Conv2d(16, config.out_c, kernel_size=3, padding=1),  # Output C' channels
-            nn.Flatten(),  # Flatten to prepare for linear mapping
-            nn.Linear(
-                self.output_side * self.output_side * config.out_c, action_dim
-            ),  # Map to action_dim
+        self.layers = nn.Sequential(
+            ResBlock(1, 16, stride=2),   # (1, 65, 65) --> (16, 33, 33)
+            ResBlock(16, 32, stride=2),  # (32, 17, 17)
+            ResBlock(32, 64, stride=2),  # (64, 9, 9)
+            ResBlock(64, 128, stride=2), # (128, 5, 5)
         )
 
-    def forward(self, states_embed, pred_states):
-        """
-        Args:
-            states_embed: Tensor of shape (B*(T-1), C', output_side, output_side) - previous state embeddings
-            pred_states: Tensor of shape (B*(T-1), C', output_side, output_side) - predicted state embeddings
-
-        Returns:
-            predicted_actions: Tensor of shape (B*(T-1), action_dim) - predicted actions
-        """
-        # Calculate embedding differences
-        embedding_diff = (
-            pred_states - states_embed
-        )  # (B*(T-1), C', output_side, output_side)
-
-        # Predict actions from embedding differences
-        predicted_actions = self.action_reg_net(embedding_diff)  # (B*(T-1), action_dim)
-        return predicted_actions
+    def forward(self, x):  # x: (B, 2, 65, 65)
+        return self.layers(x)  # (B, 128, 5, 5)
 
 
-class ActionRegularizationJEPA2D_ViT(BaseModel):
-    """
-    JEPA with
-      • DINO-v2 ViT-B/14 encoder      → latent [B, out_c, 5, 5]
-      • small 3x3-conv predictor
-      • action-regulariser   (predict Δx,Δy from ẑ - z)
-      • VICReg invariance / variance / covariance loss
-    """
 
-    # ---------- ctor ---------------------------------------------------
+class SplitEncoder2D(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.wall_encoder = ResEncoder2D()
+        self.agent_encoder = ResEncoder2D()
+
+    def forward(self, x):  # x: (B, 2, 65, 65)
+        wall = x[:, 0:1, :, :]  # (B, 1, 65, 65)
+        agent = x[:, 1:2, :, :]  # (B, 1, 65, 65)
+
+        wall_repr = self.wall_encoder(wall)    # (B, 128, 5, 5)
+        agent_repr = self.agent_encoder(agent) # (B, 128, 5, 5)
+
+        fused = wall_repr + agent_repr  # Element-wise sum (alternatively: torch.cat and project)
+        return fused  # Output: # (B, 128, 5, 5)
+
+
+
+class ResPredictor2D(nn.Module):
+    def __init__(self, action_dim=2):
+        super().__init__()
+        self.action_fc = nn.Linear(action_dim, 5 * 5)  # 1 × 5 × 5 channel
+
+        self.layers = nn.Sequential(
+            ResBlock(129, 129, stride=1),
+            ResBlock(129, 129, stride=1),
+            ResBlock(129, 128, stride=1),  # Output: (B, 128, 5, 5)
+        )
+
+    def forward(self, state_embed, action):
+        # state_embed: (B, 128, 5, 5)
+        # action: (B, 2)
+        B = action.shape[0]
+        action_embed = self.action_fc(action).view(B, 1, 5, 5)
+        x = torch.cat([state_embed, action_embed], dim=1)  # (B, 129, 5, 5)
+        return self.layers(x)  # (B, 128, 5, 5)
+
+
+class ResPredictor2Dv2(nn.Module):
+    def __init__(self, action_dim=2):
+        super().__init__()
+        self.action_fc = nn.Linear(action_dim, 5 * 5)  # 1 × 5 × 5 channel
+
+        self.layers = nn.Sequential(
+            ResBlock(129, 64, stride=1),
+            ResBlock(64, 128, stride=1),
+            ResBlock(128, 128, stride=1),  # Output: (B, 128, 5, 5)
+        )
+
+    def forward(self, state_embed, action):
+        # state_embed: (B, 128, 5, 5)
+        # action: (B, 2)
+        B = action.shape[0]
+        action_embed = self.action_fc(action).view(B, 1, 5, 5)
+        x = torch.cat([state_embed, action_embed], dim=1)  # (B, 129, 5, 5)
+        return self.layers(x)  # (B, 128, 5, 5)
+
+
+
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
+
+
+
+
+
+class JEPA_SplitEncoder_VICReg(BaseModel):
     def __init__(self, config):
         super().__init__(config)
+        self.wall_encoder = ResEncoder2D()
+        self.agent_encoder = ResEncoder2D()
+        self.predictor = ResPredictor2D()
 
-        # backbone pieces ------------------------------------------------
-        self.enc  = DinoV2ViTEncoder(config)      # outputs [B, C=out_c, 5, 5]
-        self.pred = ViTPredictor2D(config)        # maps (state, action) → next_state
-        self.action_reg_net = ActionRegularizer2D(
-            config, embed_dim=config.out_c, action_dim=config.action_dim)
+        self.repr_dim = 128
+        self.config = config
+        self.name = "JEPA_SplitEncoder_VICReg"
 
-        # optim / sched --------------------------------------------------
-        self.optimizer = get_optimizer(config, self.parameters())
-        self.scheduler = get_scheduler(self.optimizer, config)
+        # Set up optimizer
+        self.optimizer = AdamW(self.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
-        # consts ---------------------------------------------------------
-        self.C  = config.out_c              # latent channels (usually 1)
-        self.HW = 5 * 5                     # flattened spatial size
-        self.cfg = config
+        # Set up scheduler
+        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=config.epochs * config.steps_per_epoch)
 
-    # ---------- forward -------------------------------------------------
-    def forward(self, states, actions, teacher_forcing=True):
+        self.pool = lambda x: x.mean(dim=[2, 3])  # Average over H and W
+
+        self.vicreg_loss = VICRegLoss()
+
+        
+    def forward(self, states, actions, teacher_forcing=False, return_enc=False, pred_flattened=True):
         """
-        states  : [B, T, 2, 64, 64]
-        actions : [B, T-1, 2]
+        states: (B, T+1, 2, 65, 65)
+        actions: (B, T, action_dim)
         """
-        B, T, _, _, _ = states.shape
-        # (1) encode all frames in one batch → [B*T, C, 5, 5]
-        z = self.enc(states.view(-1, 2, 64, 64))
-        z = z.view(B, T, self.C, 5, 5)          # (B,T,C,5,5)
 
-        if teacher_forcing:                     # single‑shot predictor
-            s_in  = z[:, :-1]                  # (B,T‑1,C,5,5)
-            a_in  = actions                     # (B,T‑1,2)
-            y_hat = self.pred(
-                s_in.reshape(-1, self.C, 5, 5),
-                a_in.reshape(-1, self.cfg.action_dim)
-            ).view(B, T-1, self.C, 5, 5)
+        states, actions = states.to("cuda"), actions.to("cuda")
 
-            # prepend the true first state
-            preds = torch.cat([z[:, :1], y_hat], dim=1)   # (B,T,C,5,5)
-            return preds, z
+        B, _, C, H, W = states.shape
+        _, T, _ = actions.shape
+        T_plus_1 = T + 1
 
-        # ---------- recurrent roll‑out ---------------------
-        preds = [z[:, 0]]                                   # list of (B,C,5,5)
-        for t in range(1, T):
-            p = self.pred(preds[-1], actions[:, t-1])
-            preds.append(p)
-        preds = torch.stack(preds, dim=1)                   # (B,T,C,5,5)
-        return preds, z
+        if teacher_forcing:
+            # --- encode all states ---
+            encs = []
+            for t in range(T_plus_1):
+                wall_obs = states[:, t, 0:1]  # (B, 1, 65, 65)
+                agent_obs = states[:, t, 1:2]
 
-    # ---------- loss helpers -------------------------------------------
-    @staticmethod
-    def _flat4d(x):            # (B,T,C,H,W) → (B*T, C*H*W)
-        B, T, C, H, W = x.shape
-        return x.reshape(B*T, C*H*W)
+                wall_embed = self.wall_encoder(wall_obs)
+                agent_embed = self.agent_encoder(agent_obs)
 
-    def _vicreg(self, preds, targets):
-        loss, inv, var, cov = VICRegLoss()(
-            self._flat4d(preds[:,1:]), self._flat4d(targets[:,1:]),
-            self.cfg.vicreg_loss.lambda_invariance,
-            self.cfg.vicreg_loss.mu_variance,
-            self.cfg.vicreg_loss.nu_covariance)
-        return loss, inv, var, cov
+                encs.append(agent_embed + wall_embed)
+            encs = torch.stack(encs, dim=1)  # (B, T+1, C_out, 5, 5)
 
-    def _action_reg(self, s_prev, s_next, act):
-        act_hat = self.action_reg_net(s_prev, s_next)
-        return F.mse_loss(act_hat, act)
+            preds = torch.zeros_like(encs)
+            preds[:, 0] = encs[:, 0]  # seed
 
-    # ---------- training / val step ------------------------------------
+            inputs = encs[:, :-1].reshape(B * T, -1, 5, 5)
+            a = actions.reshape(B * T, -1)
+            preds_1_to_T = self.predictor(inputs, a).reshape(B, T, -1, 5, 5)
+            preds[:, 1:] = preds_1_to_T
+
+            if pred_flattened:
+                preds = preds.view(B, T_plus_1, -1)
+                if return_enc:
+                    encs = encs.view(B, T_plus_1, -1)
+
+            return (preds, encs) if return_enc else preds
+
+        else:
+            
+            # --- rollout mode (for probing, no peeking ahead) ---
+            wall_obs = states[:, 0, 0:1]  # (B, 1, 65, 65)
+            agent_obs = states[:, 0, 1:2]
+
+            wall_embed = self.wall_encoder(wall_obs)
+            agent_embed = self.agent_encoder(agent_obs)
+            s_embed = agent_embed + wall_embed
+
+            preds = [self.pool(s_embed)]  # Start from t=0
+
+            for t in range(T):
+                a = actions[:, t]  # (B, action_dim)
+                s_embed = self.predictor(s_embed, a)  # Predict next latent
+                preds.append(self.pool(s_embed))  # Pool and store
+
+            preds = torch.stack(preds, dim=1)  # (B, T+1, repr_dim)
+
+            return preds
+
+
     def training_step(self, batch, device):
-        states  = batch.states.to(device, non_blocking=True)
-        actions = batch.actions.to(device, non_blocking=True)
+        self.train()
+        states, actions = batch.states.to(device), batch.actions.to(device)
+        preds, targets = self.forward(states, actions, teacher_forcing=True, return_enc=True, pred_flattened=False)
+        
+        # loss = F.mse_loss(preds[:, 1:], targets[:, 1:])  # only from t=1 onwards
 
-        preds, z_true = self(states, actions, teacher_forcing=True)
+        # ignore time=0 (only predict future)
+        _, _, C, H, W = preds.shape
+        D = C*H*W
+        preds_flat = preds[:, 1:].reshape(-1, D)      # (B * T, D)
+        targets_flat = targets[:, 1:].reshape(-1, D)  # (B * T, D)
+        metrics = self.vicreg_loss(preds_flat, targets_flat)
+        loss = metrics["loss"]
 
-        # losses ---------------------------------------------------------
-        vic, inv, var, cov = self._vicreg(preds, z_true)
 
-        B,T = actions.shape[:2]
-        act_reg = self._action_reg(
-            z_true[:, :-1].reshape(-1, self.C, 5, 5),
-            preds[:, 1:].reshape(-1, self.C, 5, 5),
-            actions.reshape(-1, self.cfg.action_dim))
-
-        loss = vic + self.cfg.lambda_reg * act_reg
-
-        # optimisation ---------------------------------------------------
         self.optimizer.zero_grad()
         loss.backward()
-        self.optimizer.step(); self.scheduler.step()
+        self.optimizer.step()
+        self.scheduler.step()
 
-        # logging dict ---------------------------------------------------
-        return {
-            "loss": loss.item(),
-            "vicreg": vic.item(),
-            "action_reg": act_reg.item(),
-            "inv": inv.item(), "var": var.item(), "cov": cov.item(),
-            "lr": self.optimizer.param_groups[0]["lr"]
-        }
+        return loss.item()
 
     @torch.no_grad()
     def validation_step(self, batch):
-        preds, z = self(batch.states, batch.actions, teacher_forcing=True)
-        mse = F.mse_loss(preds[:,1:], z[:,1:])
-        return {"loss": mse.item()}
+        self.eval()
+        states, actions = batch.states.cuda(), batch.actions.cuda()
+        preds, targets = self.forward(states, actions, teacher_forcing=True, return_enc=True, pred_flattened=False)
+        loss = F.mse_loss(preds[:, 1:], targets[:, 1:])
+        return loss.item()
+
+
+
+
+
+
+
+
+
+class JEPA_SplitEncoder_VICRegV2(BaseModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.wall_encoder = ResEncoder2D()
+        self.agent_encoder = ResEncoder2D()
+        self.predictor = ResPredictor2Dv2()
+
+        self.repr_dim = 128
+        self.config = config
+        self.name = "JEPA_SplitEncoder_VICRegv2"
+
+        # Set up optimizer
+        self.optimizer = AdamW(self.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+
+        # Set up scheduler
+        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=config.epochs * config.steps_per_epoch)
+
+        self.pool = lambda x: x.mean(dim=[2, 3])  # Average over H and W
+
+        self.vicreg_loss = VICRegLoss()
+
+        
+    def forward(self, states, actions, teacher_forcing=False, return_enc=False, pred_flattened=True):
+        """
+        states: (B, T+1, 2, 65, 65)
+        actions: (B, T, action_dim)
+        """
+
+        states, actions = states.to("cuda"), actions.to("cuda")
+
+        B, _, C, H, W = states.shape
+        _, T, _ = actions.shape
+        T_plus_1 = T + 1
+
+        if teacher_forcing:
+            # --- encode all states ---
+            encs = []
+            for t in range(T_plus_1):
+                wall_obs = states[:, t, 0:1]  # (B, 1, 65, 65)
+                agent_obs = states[:, t, 1:2]
+
+                wall_embed = self.wall_encoder(wall_obs)
+                agent_embed = self.agent_encoder(agent_obs)
+
+                encs.append(agent_embed + wall_embed)
+            encs = torch.stack(encs, dim=1)  # (B, T+1, C_out, 5, 5)
+
+            preds = torch.zeros_like(encs)
+            preds[:, 0] = encs[:, 0]  # seed
+
+            inputs = encs[:, :-1].reshape(B * T, -1, 5, 5)
+            a = actions.reshape(B * T, -1)
+            preds_1_to_T = self.predictor(inputs, a).reshape(B, T, -1, 5, 5)
+            preds[:, 1:] = preds_1_to_T
+
+            if pred_flattened:
+                preds = preds.view(B, T_plus_1, -1)
+                if return_enc:
+                    encs = encs.view(B, T_plus_1, -1)
+
+            return (preds, encs) if return_enc else preds
+
+        else:
+            
+            # --- rollout mode (for probing, no peeking ahead) ---
+            wall_obs = states[:, 0, 0:1]  # (B, 1, 65, 65)
+            agent_obs = states[:, 0, 1:2]
+
+            wall_embed = self.wall_encoder(wall_obs)
+            agent_embed = self.agent_encoder(agent_obs)
+            s_embed = agent_embed + wall_embed
+
+            preds = [self.pool(s_embed)]  # Start from t=0
+
+            for t in range(T):
+                a = actions[:, t]  # (B, action_dim)
+                s_embed = self.predictor(s_embed, a)  # Predict next latent
+                preds.append(self.pool(s_embed))  # Pool and store
+
+            preds = torch.stack(preds, dim=1)  # (B, T+1, repr_dim)
+
+            return preds
+
+
+    def training_step(self, batch, device):
+        self.train()
+        states, actions = batch.states.to(device), batch.actions.to(device)
+        preds, targets = self.forward(states, actions, teacher_forcing=True, return_enc=True, pred_flattened=False)
+        
+        # loss = F.mse_loss(preds[:, 1:], targets[:, 1:])  # only from t=1 onwards
+
+        # ignore time=0 (only predict future)
+        _, _, C, H, W = preds.shape
+        D = C*H*W
+        preds_flat = preds[:, 1:].reshape(-1, D)      # (B * T, D)
+        targets_flat = targets[:, 1:].reshape(-1, D)  # (B * T, D)
+        metrics = self.vicreg_loss(preds_flat, targets_flat)
+        loss = metrics["loss"]
+
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self.scheduler.step()
+
+        return loss.item()
+
+    @torch.no_grad()
+    def validation_step(self, batch):
+        self.eval()
+        states, actions = batch.states.cuda(), batch.actions.cuda()
+        preds, targets = self.forward(states, actions, teacher_forcing=True, return_enc=True, pred_flattened=False)
+        loss = F.mse_loss(preds[:, 1:], targets[:, 1:])
+        return loss.item()
+
+
+
+
+
+
+
+class JEPA_SplitEncoder_CombinedLoss(BaseModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.wall_encoder = ResEncoder2D()
+        self.agent_encoder = ResEncoder2D()
+        self.predictor = ResPredictor2D()
+
+        self.repr_dim = 128
+        self.config = config
+        self.name = "JEPA_SplitEncoder_CombinedLoss"
+
+        # Set up optimizer
+        self.optimizer = AdamW(self.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+
+        # Set up scheduler
+        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=config.epochs * config.steps_per_epoch)
+
+        self.pool = lambda x: x.mean(dim=[2, 3])  # Average over H and W
+
+        self.vicreg_loss = VICRegLoss()
+
+        
+    def forward(self, states, actions, teacher_forcing=False, return_enc=False, pred_flattened=True):
+        """
+        states: (B, T+1, 2, 65, 65)
+        actions: (B, T, action_dim)
+        """
+
+        states, actions = states.to("cuda"), actions.to("cuda")
+
+        B, _, C, H, W = states.shape
+        _, T, _ = actions.shape
+        T_plus_1 = T + 1
+
+        if teacher_forcing:
+            # --- encode all states ---
+            encs = []
+            for t in range(T_plus_1):
+                wall_obs = states[:, t, 0:1]  # (B, 1, 65, 65)
+                agent_obs = states[:, t, 1:2]
+
+                wall_embed = self.wall_encoder(wall_obs)
+                agent_embed = self.agent_encoder(agent_obs)
+
+                encs.append(agent_embed + wall_embed)
+            encs = torch.stack(encs, dim=1)  # (B, T+1, C_out, 5, 5)
+
+            preds = torch.zeros_like(encs)
+            preds[:, 0] = encs[:, 0]  # seed
+
+            inputs = encs[:, :-1].reshape(B * T, -1, 5, 5)
+            a = actions.reshape(B * T, -1)
+            preds_1_to_T = self.predictor(inputs, a).reshape(B, T, -1, 5, 5)
+            preds[:, 1:] = preds_1_to_T
+
+            if pred_flattened:
+                preds = preds.view(B, T_plus_1, -1)
+                if return_enc:
+                    encs = encs.view(B, T_plus_1, -1)
+
+            return (preds, encs) if return_enc else preds
+
+        else:
+            
+            # --- rollout mode (for probing, no peeking ahead) ---
+            wall_obs = states[:, 0, 0:1]  # (B, 1, 65, 65)
+            agent_obs = states[:, 0, 1:2]
+
+            wall_embed = self.wall_encoder(wall_obs)
+            agent_embed = self.agent_encoder(agent_obs)
+            s_embed = agent_embed + wall_embed
+
+            preds = [self.pool(s_embed)]  # Start from t=0
+
+            for t in range(T):
+                a = actions[:, t]  # (B, action_dim)
+                s_embed = self.predictor(s_embed, a)  # Predict next latent
+                preds.append(self.pool(s_embed))  # Pool and store
+
+            preds = torch.stack(preds, dim=1)  # (B, T+1, repr_dim)
+
+            return preds
+
+
+    def training_step(self, batch, device):
+        self.train()
+        states, actions = batch.states.to(device), batch.actions.to(device)
+        preds, targets = self.forward(states, actions, teacher_forcing=True, return_enc=True, pred_flattened=False)
+        
+        # loss = F.mse_loss(preds[:, 1:], targets[:, 1:])  # only from t=1 onwards
+
+        # ignore time=0 (only predict future)
+        _, _, C, H, W = preds.shape
+        D = C*H*W
+        preds_flat = preds[:, 1:].reshape(-1, D)      # (B * T, D)
+        targets_flat = targets[:, 1:].reshape(-1, D)  # (B * T, D)
+        metrics = self.vicreg_loss(preds_flat, targets_flat)
+
+        mse_loss = F.mse_loss(preds_flat, targets_flat)
+        
+        loss = metrics["loss"] + mse_loss
+
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self.scheduler.step()
+
+        return loss.item()
+
+    @torch.no_grad()
+    def validation_step(self, batch):
+        self.eval()
+        states, actions = batch.states.cuda(), batch.actions.cuda()
+        preds, targets = self.forward(states, actions, teacher_forcing=True, return_enc=True, pred_flattened=False)
+        loss = F.mse_loss(preds[:, 1:], targets[:, 1:])
+        return loss.item()
+
+
+
+
+
+
+
+
+
+
+
+class JEPA_SplitEncoder_CombinedLossNoPool(BaseModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.wall_encoder = ResEncoder2D()
+        self.agent_encoder = ResEncoder2D()
+        self.predictor = ResPredictor2D()
+
+        self.repr_dim = 128 * 5 * 5
+        self.config = config
+        self.name = "JEPA_SplitEncoder_CombinedLossNoPool"
+
+        # Set up optimizer
+        self.optimizer = AdamW(self.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+
+        # Set up scheduler
+        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=config.epochs * config.steps_per_epoch)
+
+        self.pool = lambda x: x.mean(dim=[2, 3])  # Average over H and W (NOT USED in this model, but too afraid to delete it lol)
+
+        self.vicreg_loss = VICRegLoss()
+
+        
+    def forward(self, states, actions, teacher_forcing=False, return_enc=False, pred_flattened=True):
+        """
+        states: (B, T+1, 2, 65, 65)
+        actions: (B, T, action_dim)
+        """
+
+        states, actions = states.to("cuda"), actions.to("cuda")
+
+        B, _, C, H, W = states.shape
+        _, T, _ = actions.shape
+        T_plus_1 = T + 1
+
+        if teacher_forcing:
+            # --- encode all states ---
+            encs = []
+            for t in range(T_plus_1):
+                wall_obs = states[:, t, 0:1]  # (B, 1, 65, 65)
+                agent_obs = states[:, t, 1:2]
+
+                wall_embed = self.wall_encoder(wall_obs)
+                agent_embed = self.agent_encoder(agent_obs)
+
+                encs.append(agent_embed + wall_embed)
+            encs = torch.stack(encs, dim=1)  # (B, T+1, C_out, 5, 5)
+
+            preds = torch.zeros_like(encs)
+            preds[:, 0] = encs[:, 0] 
+
+            inputs = encs[:, :-1].reshape(B * T, -1, 5, 5)
+            a = actions.reshape(B * T, -1)
+            preds_1_to_T = self.predictor(inputs, a).reshape(B, T, -1, 5, 5)
+            preds[:, 1:] = preds_1_to_T
+
+            if pred_flattened:
+                preds = preds.view(B, T_plus_1, -1)
+                if return_enc:
+                    encs = encs.view(B, T_plus_1, -1)
+
+            return (preds, encs) if return_enc else preds
+
+        else:
+            # --- rollout mode (for probing, no peeking ahead) ---
+            wall_obs = states[:, 0, 0:1]  # (B, 1, 65, 65)
+            agent_obs = states[:, 0, 1:2]
+            
+            wall_embed = self.wall_encoder(wall_obs)  # (B, C, 5, 5)
+            agent_embed = self.agent_encoder(agent_obs)  # (B, C, 5, 5)
+            s_embed = agent_embed + wall_embed
+            
+            preds = [s_embed]  # Store full spatial feature, not pooled!
+            
+            for t in range(T):
+                a = actions[:, t]  # (B, action_dim)
+                s_embed = self.predictor(s_embed, a)  # (B, C, 5, 5)
+                preds.append(s_embed)  # Save spatial feature at each step
+            
+            # Stack along time dimension
+            preds = torch.stack(preds, dim=1)  # (B, T+1, C, 5, 5)
+            
+            # Now, flatten spatial dims to get (B, T+1, D)
+            B, T_plus_1, C, H, W = preds.shape
+            D = C * H * W
+            preds = preds.view(B, T_plus_1, D)  # (B, T+1, D)
+
+            return preds
+
+
+    def training_step(self, batch, device):
+        self.train()
+        states, actions = batch.states.to(device), batch.actions.to(device)
+        preds, targets = self.forward(states, actions, teacher_forcing=True, return_enc=True, pred_flattened=False)
+        
+        # loss = F.mse_loss(preds[:, 1:], targets[:, 1:])  # only from t=1 onwards
+
+        # ignore time=0 (only predict future)
+        _, _, C, H, W = preds.shape
+        D = C*H*W
+        preds_flat = preds[:, 1:].reshape(-1, D)      # (B * T, D)
+        targets_flat = targets[:, 1:].reshape(-1, D)  # (B * T, D)
+        metrics = self.vicreg_loss(preds_flat, targets_flat)
+
+        mse_loss = F.mse_loss(preds_flat, targets_flat)
+        
+        loss = metrics["loss"] + mse_loss
+
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self.scheduler.step()
+
+        return loss.item()
+
+    @torch.no_grad()
+    def validation_step(self, batch):
+        self.eval()
+        states, actions = batch.states.cuda(), batch.actions.cuda()
+        preds, targets = self.forward(states, actions, teacher_forcing=True, return_enc=True, pred_flattened=False)
+        loss = F.mse_loss(preds[:, 1:], targets[:, 1:])
+        return loss.item()
+
+
+
+
+
+
