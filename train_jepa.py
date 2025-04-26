@@ -390,7 +390,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32, help="training batch size")
     parser.add_argument("--num-hist", type=int, default=16, help="history frames for JEPA prediction")
     parser.add_argument("--num-pred", type=int, default=1, help="number of prediction frames (unused currently)")
-    parser.add_argument("--lr", type=float, default=2e-3, help="learning rate")
+    parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
     parser.add_argument("--action-emb-dim", type=int, default=4, help="dimension of action embeddings")
     parser.add_argument("--encoder-name", type=str, default="dinov2_vits14", help="DINO-V2 encoder variant (dinov2_vits14, etc)")
     parser.add_argument("--feature-key", type=str, default="x_norm_patchtokens", choices=["x_norm_patchtokens","x_norm_clstoken"], help="encoder output feature key")

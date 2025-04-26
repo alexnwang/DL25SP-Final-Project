@@ -111,17 +111,22 @@ class ProbingEvaluator:
         for epoch in tqdm(range(epochs), desc=f"Probe prediction epochs"):
             for batch in tqdm(dataset, desc="Probe prediction step"):
                 ################################################################################
-                # NEW  – autoregressive roll-out from frame-0
-                seq_len = batch.states.size(1)
-                init_state = batch.states[:, :1]
-                actions = batch.actions
+                init_state = batch.states[:, :1].to(self.device)
+                actions    = batch.actions.to(self.device)
                 with torch.no_grad():
-                    emb_seq = model.rollout(init_state, actions)     # (B,T,P,D)
-                pred_encs = emb_seq.mean(dim=2)[:,1:]                # (B,T-1,D)
-                pred_encs = pred_encs.transpose(0,1).contiguous()    # (T-1,B,D)
-                μ, σ = pred_encs.mean((0,1), keepdim=True), pred_encs.std((0,1), keepdim=True).clamp_min(1e-6)
-                pred_encs = (pred_encs - μ) / σ                       # z-score
-                target = batch.locations.cuda()[:,1:]
+                    emb_seq = model.rollout(init_state, actions)   # (B, T, P, D)
+                pred_encs = emb_seq.mean(dim=2)[:, 1:]             # (B, T-1, D)
+                pred_encs = pred_encs.transpose(0, 1).contiguous() # (T-1, B, D)
+
+                # On first step, compute & stash training μ/σ
+                if step == 0:
+                    μ = pred_encs.mean((0, 1), keepdim=True)
+                    σ = pred_encs.std((0, 1), keepdim=True).clamp_min(1e-6)
+                    self.feat_mean = μ.detach()
+                    self.feat_std  = σ.detach()
+
+                # Apply z-score with stored stats
+                pred_encs = (pred_encs - self.feat_mean) / self.feat_std
                 ################################################################################
 
                 pred_encs = pred_encs.detach()
@@ -214,17 +219,14 @@ class ProbingEvaluator:
 
         for idx, batch in enumerate(tqdm(val_ds, desc="Eval probe pred")):
             ################################################################################
-            # NEW  – identical to the block above, but w/o gradient tracking
-            seq_len = batch.states.size(1)
-            init_state = batch.states[:, :1]
-            actions = batch.actions
-            emb_seq = model.rollout(init_state, actions)        # (B,T,P,D)
-            pred_encs = emb_seq.mean(dim=2)[:,1:]                # (B,T-1,D)
-            pred_encs = pred_encs.transpose(0,1)                 # (T-1,B,D)
-            pad_len = seq_len - 1 - pred_encs.size(0)            # (should be 0 now)
-            if pad_len > 0:
-                pad = torch.zeros(pad_len, *pred_encs.shape[1:], device=pred_encs.device)
-                pred_encs = torch.cat([pad, pred_encs], dim=0)
+            init_state = batch.states[:, :1].to(self.device)
+            actions    = batch.actions.to(self.device)
+            emb_seq = model.rollout(init_state, actions)       # (B, T, P, D)
+            pred_encs = emb_seq.mean(dim=2)[:, 1:]               # (B, T-1, D)
+            pred_encs = pred_encs.transpose(0, 1).contiguous()   # (T-1, B, D)
+
+            # Apply exactly the same normalization from training
+            pred_encs = (pred_encs - self.feat_mean) / self.feat_std
             ################################################################################
 
             target = batch.locations.cuda()[:,1:]
