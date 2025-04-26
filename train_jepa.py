@@ -235,6 +235,9 @@ class JEPAWrapper(nn.Module):
             pool=pred_pool,
         ).to(self.device)
         self.num_hist = num_hist
+        # initialize attention pooling head if using attention pooling
+        if pred_pool == 'attn':
+            self.attn_pool = nn.Linear(self.embed_dim, 1).to(self.device)
 
     def forward(self, states: torch.Tensor, actions: torch.Tensor):
         """
@@ -273,9 +276,19 @@ class JEPAWrapper(nn.Module):
         inp    = rearrange(tokens, 'b t p d -> b (t p) d')
 
         out = self.predictor(inp)
-        out = out.view(B, T, P+1, self.embed_dim)[:, :, :P] # keep visual tokens
-        return out.mean(dim=2)                              # (B,T,embed_dim)
-
+        out = out.view(B, T, P+1, self.embed_dim)[:, :, :P]  # keep visual tokens
+        # apply pooling strategy across patches
+        if self.predictor.pool == 'mean':
+            rep = out.mean(dim=2)
+        elif self.predictor.pool == 'cls':
+            rep = out[:, :, 0, :]
+        elif self.predictor.pool == 'attn':
+            logits = self.attn_pool(out)                    # (B,T,P,1)
+            weights = F.softmax(logits.squeeze(-1), dim=2)   # (B,T,P)
+            rep = torch.sum(out * weights.unsqueeze(-1), dim=2)  # (B,T,embed_dim)
+        else:
+            raise ValueError(f"Invalid pooling strategy: {self.predictor.pool}")
+        return rep
 
     # --- helper --------------------------------------------------------------
     def _encode_frames(self, x: torch.Tensor) -> torch.Tensor:
@@ -428,7 +441,7 @@ def main():
     parser.add_argument("--predictor-mlp-dim", type=int, default=512, help="MLP hidden dimension in predictor")
     parser.add_argument("--predictor-dropout", type=float, default=0.0, help="dropout rate in predictor transformer")
     parser.add_argument("--predictor-emb-dropout", type=float, default=0.0, help="dropout on predictor input embeddings")
-    parser.add_argument("--predictor-pool", type=str, default="mean", choices=["cls","mean"], help="pooling strategy for predictor output")
+    parser.add_argument("--predictor-pool", type=str, default="mean", choices=["cls","mean","attn"], help="pooling strategy for predictor output (mean, cls, attn)")
     parser.add_argument(
         "--save-path", type=str, default="jepa_model_small_16hist_no_teacher_forcing.pth"
     )
@@ -481,8 +494,7 @@ def main():
 
     # optimizer on predictor and action encoder only
     optimizer = torch.optim.Adam(
-        list(model.action_encoder.parameters())
-        + list(model.predictor.parameters()),
+        [p for p in model.parameters() if p.requires_grad],
         lr=args.lr,
     )
     # learning rate scheduler with linear warmup and decay
@@ -515,9 +527,6 @@ def main():
             pred = preds[:,1:]    # (B,T-1,num_patches,embed_dim)
             gold = truth[:,1:]    # (B,T-1,num_patches,embed_dim)
             if args.vicreg:
-                # normalize latents before VICReg loss
-                pred = normalize_latents(pred)
-                gold = normalize_latents(gold)
                 loss = vicreg_loss(pred, gold)
             else:
                 loss = F.mse_loss(pred, gold)
