@@ -16,6 +16,20 @@ from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
 from einops import rearrange, repeat
+from torch.optim.lr_scheduler import LambdaLR
+
+# helper functions for learning rate schedule and latent normalization
+def linear_warmup_decay(warmup_steps, total_steps):
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        return max(0.0, float(total_steps - current_step) / float(max(1, total_steps - warmup_steps)))
+    return lr_lambda
+
+def normalize_latents(z):
+    z = z - z.mean(dim=0, keepdim=True)
+    z = z / (z.std(dim=0, keepdim=True) + 1e-6)
+    return z
 
 # ============================================================================
 # Encoder: DINO-V2 patch embeddings
@@ -404,13 +418,13 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32, help="training batch size")
     parser.add_argument("--num-hist", type=int, default=16, help="history frames for JEPA prediction")
     parser.add_argument("--num-pred", type=int, default=1, help="number of prediction frames (unused currently)")
-    parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
+    parser.add_argument("--lr", type=float, default=2e-4, help="learning rate")
     parser.add_argument("--action-emb-dim", type=int, default=4, help="dimension of action embeddings")
     parser.add_argument("--encoder-name", type=str, default="dinov2_vits14", help="DINO-V2 encoder variant (dinov2_vits14, etc)")
     parser.add_argument("--feature-key", type=str, default="x_norm_patchtokens", choices=["x_norm_patchtokens","x_norm_clstoken"], help="encoder output feature key")
-    parser.add_argument("--predictor-depth", type=int, default=2, help="number of transformer layers in predictor")
-    parser.add_argument("--predictor-heads", type=int, default=2, help="number of attention heads in predictor")
-    parser.add_argument("--predictor-dim-head", type=int, default=16, help="dimensionality of each attention head in predictor")
+    parser.add_argument("--predictor-depth", type=int, default=4, help="number of transformer layers in predictor")
+    parser.add_argument("--predictor-heads", type=int, default=4, help="number of attention heads in predictor")
+    parser.add_argument("--predictor-dim-head", type=int, default=32, help="dimensionality of each attention head in predictor")
     parser.add_argument("--predictor-mlp-dim", type=int, default=512, help="MLP hidden dimension in predictor")
     parser.add_argument("--predictor-dropout", type=float, default=0.0, help="dropout rate in predictor transformer")
     parser.add_argument("--predictor-emb-dropout", type=float, default=0.0, help="dropout on predictor input embeddings")
@@ -471,7 +485,11 @@ def main():
         + list(model.predictor.parameters()),
         lr=args.lr,
     )
-
+    # learning rate scheduler with linear warmup and decay
+    scheduler = LambdaLR(optimizer, lr_lambda=linear_warmup_decay(
+        warmup_steps=1000,
+        total_steps=len(loader) * args.epochs
+    ))
     # training
     model.train()
 
@@ -497,6 +515,9 @@ def main():
             pred = preds[:,1:]    # (B,T-1,num_patches,embed_dim)
             gold = truth[:,1:]    # (B,T-1,num_patches,embed_dim)
             if args.vicreg:
+                # normalize latents before VICReg loss
+                pred = normalize_latents(pred)
+                gold = normalize_latents(gold)
                 loss = vicreg_loss(pred, gold)
             else:
                 loss = F.mse_loss(pred, gold)
@@ -504,6 +525,8 @@ def main():
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            # update learning rate scheduler each step
+            scheduler.step()
             total_loss += loss.item() * B
             pbar.set_postfix({'loss': loss.item()})
         avg_loss = total_loss / len(dataset)
