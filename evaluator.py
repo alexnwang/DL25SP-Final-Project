@@ -70,7 +70,7 @@ class ProbingEvaluator:
         """
         Probes whether the predicted embeddings capture the future locations
         """
-        repr_dim = self.model.repr_dim
+        repr_dim = self.model.embed_dim
         dataset = self.ds
         model = self.model
 
@@ -111,24 +111,17 @@ class ProbingEvaluator:
         for epoch in tqdm(range(epochs), desc=f"Probe prediction epochs"):
             for batch in tqdm(dataset, desc="Probe prediction step"):
                 ################################################################################
-                # TODO: Forward pass through your model
-                # Use sliding windows of the full sequence of states for prediction and pad to full length
+                # NEW  – autoregressive roll-out from frame-0
                 seq_len = batch.states.size(1)
-                preds_list = []
-                for start in range(seq_len - model.num_hist + 1):
-                    hist_states = batch.states[:, start : start + model.num_hist]
-                    hist_actions = batch.actions[:, start : start + model.num_hist - 1]
-                    out = model(states=hist_states, actions=hist_actions)  # (B, num_hist, D)
-                    preds_list.append(out[:, -1, :])  # last history embedding as prediction
-                pred_encs = torch.stack(preds_list, dim=1)  # (B, T_pred, D)
-                # convert to time-major for prober: (T_pred, BS, D)
-                pred_encs = pred_encs.transpose(0, 1)
-                # pad to full sequence length
-                pad_len = seq_len - pred_encs.size(0)
-                if pad_len > 0:
-                    pad_tensor = torch.zeros(pad_len, pred_encs.size(1), pred_encs.size(2), device=pred_encs.device)
-                    pred_encs = torch.cat([pad_tensor, pred_encs], dim=0)
-                # Make sure pred_encs has shape (T, BS, D) at this point
+                init_state = batch.states[:, :1]
+                actions = batch.actions
+                with torch.no_grad():
+                    emb_seq = model.rollout(init_state, actions)     # (B,T,P,D)
+                pred_encs = emb_seq.mean(dim=2)[:,1:]                # (B,T-1,D)
+                pred_encs = pred_encs.transpose(0,1).contiguous()    # (T-1,B,D)
+                μ, σ = pred_encs.mean((0,1), keepdim=True), pred_encs.std((0,1), keepdim=True).clamp_min(1e-6)
+                pred_encs = (pred_encs - μ) / σ                       # z-score
+                target = batch.locations.cuda()[:,1:]
                 ################################################################################
 
                 pred_encs = pred_encs.detach()
@@ -138,7 +131,7 @@ class ProbingEvaluator:
 
                 losses_list = []
 
-                target = getattr(batch, "locations").cuda()
+                target = batch.locations.cuda()[:,1:]
                 target = self.normalizer.normalize_location(target)
 
                 if (
@@ -221,27 +214,20 @@ class ProbingEvaluator:
 
         for idx, batch in enumerate(tqdm(val_ds, desc="Eval probe pred")):
             ################################################################################
-            # TODO: Forward pass through your model
-            # Use sliding windows of the full sequence of states for prediction and pad to full length
+            # NEW  – identical to the block above, but w/o gradient tracking
             seq_len = batch.states.size(1)
-            preds_list = []
-            for start in range(seq_len - model.num_hist + 1):
-                hist_states = batch.states[:, start : start + model.num_hist]
-                hist_actions = batch.actions[:, start : start + model.num_hist - 1]
-                out = model(states=hist_states, actions=hist_actions)  # (B, num_hist, D)
-                preds_list.append(out[:, -1, :])  # last history embedding as prediction
-            pred_encs = torch.stack(preds_list, dim=1)  # (B, T_pred, D)
-            # time-major: (T_pred, BS, D)
-            pred_encs = pred_encs.transpose(0, 1)
-            # pad to full sequence length
-            pad_len = seq_len - pred_encs.size(0)
+            init_state = batch.states[:, :1]
+            actions = batch.actions
+            emb_seq = model.rollout(init_state, actions)        # (B,T,P,D)
+            pred_encs = emb_seq.mean(dim=2)[:,1:]                # (B,T-1,D)
+            pred_encs = pred_encs.transpose(0,1)                 # (T-1,B,D)
+            pad_len = seq_len - 1 - pred_encs.size(0)            # (should be 0 now)
             if pad_len > 0:
-                pad_tensor = torch.zeros(pad_len, pred_encs.size(1), pred_encs.size(2), device=pred_encs.device)
-                pred_encs = torch.cat([pad_tensor, pred_encs], dim=0)
-            # Make sure pred_encs has shape (T, BS, D) at this point
+                pad = torch.zeros(pad_len, *pred_encs.shape[1:], device=pred_encs.device)
+                pred_encs = torch.cat([pad, pred_encs], dim=0)
             ################################################################################
 
-            target = getattr(batch, "locations").cuda()
+            target = batch.locations.cuda()[:,1:]
             target = self.normalizer.normalize_location(target)
 
             pred_locs = torch.stack([prober(x) for x in pred_encs], dim=1)

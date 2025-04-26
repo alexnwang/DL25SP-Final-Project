@@ -191,6 +191,18 @@ class JEPAWrapper(nn.Module):
         self.repr_dim = self.encoder.emb_dim
         # action encoder: 1D conv mapping 2D actions to repr_dim per frame
         self.action_encoder = nn.Conv1d(in_channels=2, out_channels=self.repr_dim, kernel_size=1, stride=1).to(self.device)
+        # register ImageNet normalization on the correct device
+        self.register_buffer('rgb_mean', torch.tensor([0.485,0.456,0.406], device=self.device).view(1,3,1,1))
+        self.register_buffer('rgb_std',  torch.tensor([0.229,0.224,0.225], device=self.device).view(1,3,1,1))
+        # compute normalized patch coordinates for each patch token
+        grid_size = 224 // self.encoder.patch_size
+        xs = torch.linspace(0, 1, grid_size, device=self.device)
+        ys = torch.linspace(0, 1, grid_size, device=self.device)
+        yy, xx = torch.meshgrid(ys, xs)
+        coords = torch.stack([xx, yy], dim=-1).view(-1, 2)  # (P,2)
+        self.register_buffer('patch_coords', coords)
+        # combined embedding dimension (DINO-V2 feat dim + coord dim)
+        self.embed_dim = self.repr_dim + coords.size(-1)
         # compute number of patches per frame (assume 224x224 input)
         num_side = 224 // self.encoder.patch_size
         num_patches = num_side * num_side
@@ -199,7 +211,7 @@ class JEPAWrapper(nn.Module):
         self.predictor = ViTPredictor(
             num_patches=extended_patches,
             num_frames=num_hist,
-            dim=self.repr_dim,
+            dim=self.embed_dim,
             depth=pred_depth,
             heads=pred_heads,
             dim_head=pred_dim_head,
@@ -210,53 +222,105 @@ class JEPAWrapper(nn.Module):
         ).to(self.device)
         self.num_hist = num_hist
 
-    def forward(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+    def forward(self, states: torch.Tensor, actions: torch.Tensor):
         """
-        Args:
-            states: (B, num_hist, C, H, W) history frames
-            actions: (B, T-1, 2) actions
-        Returns:
-            pred_reprs: (B, num_hist, repr_dim)
+        states : (B, T, 3, H, W)
+        actions: (B, T-1, 2)
+        returns : (B, T, embed_dim)  – per-frame pooled representation
         """
-        states = states.to(self.device)
-        acts = actions.to(self.device)
         B, T, C, H, W = states.shape
-        # embed each frame into patch tokens
-        x = states.reshape(-1, C, H, W)
-        # ensure 3 channels
-        if x.shape[1] == 2:
-            x = torch.cat([x, x[:, 0:1]], dim=1)
-        elif x.shape[1] == 1:
-            x = x.repeat(1, 3, 1, 1)
-        # resize to 224×224
-        x = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
-        # normalize for DINO-V2
-        mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
-        x = (x - mean) / std
+        device = self.device
+
+        x = states.view(-1, C, H, W)
+        if C < 3:
+            x = x.repeat(1, 3//C + 1, 1, 1)[:, :3]          # ensure RGB
+
+        x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
+        x = (x - self.rgb_mean) / self.rgb_std
+
         with torch.no_grad():
-            emb = self.encoder(x)  # (B*T, num_patches, repr_dim)
-        # reshape to (B, T, num_patches, repr_dim)
-        emb = emb.view(B, T, self.num_patches, self.repr_dim)
-        # embed actions into repr_dim per frame using 1D conv
-        # acts: (B, T-1, 2)
-        act_seq = acts.permute(0, 2, 1)  # (B, 2, T-1)
-        act_seq_emb = self.action_encoder(act_seq)  # (B, repr_dim, T-1)
-        # pad dummy action for last frame
-        pad = torch.zeros(B, self.repr_dim, 1, device=self.device)
-        act_seq_emb = torch.cat([act_seq_emb, pad], dim=2)  # (B, repr_dim, T)
-        act_emb = act_seq_emb.permute(0, 2, 1).unsqueeze(2)  # (B, T, 1, repr_dim)
-        # concatenate visual patches with action tokens
-        z = torch.cat([emb, act_emb], dim=2)  # (B, T, num_patches+1, repr_dim)
-        # flatten time and token dims
-        inp = rearrange(z, 'b t p d -> b (t p) d')
-        # apply ViT predictor; fallback on OOM
+            patches = self.encoder(x)                       # (B*T,P,repr_dim)
+
+        P = self.num_patches
+        patches = patches.view(B, T, P, self.repr_dim)
+        coords  = self.patch_coords.view(1, 1, P, 2)
+        patches = torch.cat([patches, coords.expand_as(patches[...,:1])], dim=-1)  # → embed_dim
+
+        # -------- action token ---------------------------------------------------
+        a = actions.permute(0, 2, 1)                        # (B,2,T-1)
+        a_emb = self.action_encoder(a)                      # (B,repr_dim,T-1)
+        pad   = torch.zeros(B, self.repr_dim, 1, device=device)
+        a_emb = torch.cat([a_emb, pad], dim=2)              # (B,repr_dim,T)
+        zeros = torch.zeros(B, 2, T, device=device)
+        a_emb = torch.cat([a_emb, zeros], dim=1)            # (B,embed_dim,T)
+        a_tok = a_emb.permute(0, 2, 1).unsqueeze(2)         # (B,T,1,embed_dim)
+
+        tokens = torch.cat([patches, a_tok], dim=2)         # (B,T,P+1,embed_dim)
+        inp    = rearrange(tokens, 'b t p d -> b (t p) d')
+
         out = self.predictor(inp)
-        # reshape back to (B, T, num_patches+1, repr_dim)
-        out = out.view(B, T, self.num_patches+1, self.repr_dim)
-        # mean-pool only visual tokens per frame
-        reprs = out[:, :, :self.num_patches, :].mean(dim=2)
-        return reprs
+        out = out.view(B, T, P+1, self.embed_dim)[:, :, :P] # keep visual tokens
+        return out.mean(dim=2)                              # (B,T,embed_dim)
+
+
+    # --- helper --------------------------------------------------------------
+    def _encode_frames(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x : (B, 3, H, W)  – already resized to 224×224 & RGB
+        returns (B, num_patches, embed_dim) with coords concatenated
+        """
+        with torch.no_grad():
+            z = self.encoder(x)                                    # (B,P,D0)
+        coords = self.patch_coords.view(1, self.num_patches, 2)    # (1,P,2)
+        coords = coords.expand(z.size(0), -1, -1)
+        return torch.cat([z, coords], dim=-1)                      # (B,P,D)
+
+    # --- NEW -----------------------------------------------------------------
+    def rollout(self,
+        init_frame: torch.Tensor,      # (B,1,3,H,W)
+        actions:    torch.Tensor):     # (B,T-1,2)
+        """
+        Autoregressively predicts embeddings for all future steps.
+        Returns: (B, T, num_patches, embed_dim) – the first slice (t=0)
+                 is just the encoded init_frame.
+        """
+        B, _, C, H, W = init_frame.shape
+        Tm1 = actions.size(1)                   # T-1
+        device = self.device
+
+        # -- encode t=0 --------------------------------------------------------
+        x0 = init_frame[:,0]  # (B,C,H,W)
+        # ensure 3 channels
+        if x0.shape[1] == 2:
+            x0 = torch.cat([x0, x0[:,0:1]], dim=1)
+        elif x0.shape[1] == 1:
+            x0 = x0.repeat(1,3,1,1)
+        frame0 = F.interpolate(x0, size=(224,224), mode='bilinear', align_corners=False)
+        frame0 = (frame0 - self.rgb_mean) / self.rgb_std           # normalise
+        latent_t = self._encode_frames(frame0)                     # (B,P,D)
+        latents  = [latent_t]                                      # list of (B,P,D)
+
+        # -- step through actions ---------------------------------------------
+        for step in range(Tm1):
+            # 1 embed action_t  → shape (B,1,1,embed_dim)
+            a = actions[:,step:step+1].permute(0,2,1)              # (B,2,1)
+            a_emb = self.action_encoder(a)                         # (B,D0,1)
+            zeros = torch.zeros(B, 2, 1, device=device)            # coords = 0
+            a_emb = torch.cat([a_emb, zeros], dim=1)               # (B,D,1)
+            a_emb = a_emb.permute(0,2,1).unsqueeze(2)              # (B,1,1,D)
+
+            # 2 concatenate "current latent patches" with that action token
+            token_in = torch.cat([latent_t.unsqueeze(1), a_emb], dim=2)   # (B,1,P+1,D)
+            flat_in  = rearrange(token_in, 'b t p d -> b (t p) d')        # (B,(P+1),D)
+
+            # 3 one transformer pass   (causal mask inside Attention keeps order)
+            out = self.predictor(flat_in)                                 # (B,(P+1),D)
+            out = out.view(B, 1, self.num_patches+1, self.embed_dim)      # (B,1,P+1,D)
+            latent_t = out[:,0,:self.num_patches]                         # (B,P,D)
+
+            latents.append(latent_t)
+
+        return torch.stack(latents, dim=1)     # (B, T, P, D)
 
 # ============================================================================
 # Dataset: sliding windows of states/actions
@@ -342,6 +406,7 @@ def main():
     )
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--no-teacher-forcing", action="store_true", help="Disable teacher forcing (predict current frame instead of next)")
+    parser.add_argument("--vicreg", action="store_true", help="Use VICReg loss")
     args = parser.parse_args()
 
     # transforms for DINO-V2
@@ -349,10 +414,6 @@ def main():
         transforms.ToPILImage(),
         transforms.Resize(224),
         transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        ),
     ])
 
     # load raw numpy data
@@ -398,60 +459,36 @@ def main():
 
     # training
     model.train()
-    teacher_forcing = not args.no_teacher_forcing
-    target_start_idx = 1 if teacher_forcing else 0
-    pred_start_idx = 1 if teacher_forcing else 0
 
     for epoch in range(1, args.epochs + 1):
         total_loss = 0.0
-        # iterate with progress bar per epoch
         pbar = tqdm(loader, desc=f"Epoch {epoch}/{args.epochs}")
         for imgs, acts in pbar:
-            # imgs: (B,W,3,H,W); acts: (B, W-1,2)
-            B, W, C, H, Wp = imgs.shape
-            # use history frames for ViTPredictor
-            hist = imgs[:, :args.num_hist].to(device)  # (B, num_hist, 3, H, W)
-            # slice actions to only include transitions between history frames
-            # Action sequence length should match predictor input length (num_hist)
-            # Needs T-1 actions for T frames. If num_hist=16, need 15 actions.
-            acts_hist = acts[:, :args.num_hist - 1].to(device)
-            preds = model(hist, acts_hist)  # (B, num_hist, repr_dim)
+            B, T, C, H, W = imgs.shape
+            # -----  encode only frame-0  --------------------------------------------
+            init = imgs[:, :1].to(device)        # (B,1,3,H,W)
+            preds = model.rollout(init, acts.to(device))      # (B,T,P,D)
 
-            # Compute target embeddings based on teacher_forcing flag
-            target_frames = hist[:, target_start_idx:].reshape(-1, C, H, Wp).to(device)
-            if target_frames.shape[0] == 0: # Handle edge case if num_hist=1 and teacher_forcing=True
-                continue
-
-            # Preprocess target frames
-            if target_frames.shape[1] == 2:
-                target_frames = torch.cat([target_frames, target_frames[:, 0:1]], dim=1)
-            elif target_frames.shape[1] == 1:
-                target_frames = target_frames.repeat(1, 3, 1, 1)
-            target_frames = F.interpolate(target_frames, size=(224, 224), mode='bilinear', align_corners=False)
-            mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
-            std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
-            target_frames = (target_frames - mean) / std
-
-            # Get target embeddings from frozen encoder
+            # -----  ground-truth embeddings for t=0…T-1 ------------------------------
             with torch.no_grad():
-                emb = model.encoder(target_frames)  # (B*(num_hist-target_start_idx), num_patches, repr_dim)
-                targ = emb.mean(dim=1)  # (B*(num_hist-target_start_idx), repr_dim)
+                all_frames = F.interpolate(imgs.reshape(-1,3,H,W).to(device), 224,
+                                           mode='bilinear', align_corners=False)
+                all_frames = (all_frames - model.rgb_mean) / model.rgb_std
+                truth = model._encode_frames(all_frames)               # (B*T,P,D)
+            truth = truth.view(B, -1, model.num_patches, model.embed_dim)  # (B,T,P,embed_dim)
 
-            # Reshape targets
-            target_dim = args.num_hist - target_start_idx
-            targ = targ.view(B, target_dim, model.repr_dim)
-
-            # Slice predictions
-            pr = preds[:, pred_start_idx:]  # (B, num_hist - pred_start_idx, repr_dim)
-
-            # Compute VICReg loss
-            loss = vicreg_loss(pr, targ)
+            # -----  drop t=0 from loss (we never predict frame-0) -------------------
+            pred = preds[:,1:]     # (B,T-1,P,D)
+            gold = truth[:,1:]     # (B,T-1,P,D)
+            if args.vicreg:
+                loss = vicreg_loss(pred, gold)
+            else:
+                loss = F.mse_loss(pred, gold)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * B
-            # show current batch loss
             pbar.set_postfix({'loss': loss.item()})
         avg_loss = total_loss / len(dataset)
         print(f"Epoch {epoch}/{args.epochs} - loss: {avg_loss:.6f}")

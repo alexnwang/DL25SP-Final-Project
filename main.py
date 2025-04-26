@@ -94,7 +94,7 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Evaluate JEPA model")
     # model checkpoint and hyperparameters
-    parser.add_argument("--checkpoint", type=str, default="jepa_model_small_16hist.pth", help="path to JEPA model checkpoint")
+    parser.add_argument("--checkpoint", type=str, default="jepa_model_small_16hist_no_teacher_forcing.pth", help="path to JEPA model checkpoint")
     parser.add_argument("--encoder-name", type=str, default="dinov2_vits14", help="DINO-V2 encoder variant used in training")
     parser.add_argument("--feature-key", type=str, default="x_norm_patchtokens", choices=["x_norm_patchtokens","x_norm_clstoken"], help="encoder feature key used in training")
     parser.add_argument("--num-hist", type=int, default=16, help="history length used in training")
