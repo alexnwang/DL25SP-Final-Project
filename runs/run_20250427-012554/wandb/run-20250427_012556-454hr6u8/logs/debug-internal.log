@@ -54,3 +54,28 @@
 2025-04-27 01:26:37,208 DEBUG   SenderThread:147853 [sender.py:send_request():316] send_request: stop_status
 2025-04-27 01:26:39,039 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
 2025-04-27 01:26:41,040 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:26:43,041 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:26:45,042 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:26:47,043 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:26:49,044 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:26:51,044 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:26:52,279 DEBUG   HandlerThread:147853 [handler.py:handle_request():141] handle_request: stop_status
+2025-04-27 01:26:52,280 DEBUG   SenderThread:147853 [sender.py:send_request():316] send_request: stop_status
+2025-04-27 01:26:53,045 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:26:55,046 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:26:55,910 DEBUG   SenderThread:147853 [sender.py:send():302] send: stats
+2025-04-27 01:26:57,047 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:26:59,048 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:01,049 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:03,050 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:05,051 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:07,056 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:07,449 DEBUG   HandlerThread:147853 [handler.py:handle_request():141] handle_request: stop_status
+2025-04-27 01:27:07,449 DEBUG   SenderThread:147853 [sender.py:send_request():316] send_request: stop_status
+2025-04-27 01:27:09,057 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:11,057 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:13,058 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:15,059 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:17,060 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:19,061 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
+2025-04-27 01:27:21,062 INFO    Thread-12 :147853 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012554/wandb/run-20250427_012556-454hr6u8/files/output.log
