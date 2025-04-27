@@ -525,6 +525,11 @@ def main():
     os.makedirs(run_dir, exist_ok=True)
     # initialize wandb run
     wandb.init(project="jepa", dir=run_dir, config=vars(args), name=f"run_{timestamp}")
+    # watch model parameters and gradients in wandb
+    wandb.watch(model, log="all", log_freq=100)
+    # log dataset size and total trainable parameters to wandb config
+    wandb.config.train_dataset_size = len(dataset)
+    wandb.config.total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     # save hyperparameters
     with open(os.path.join(run_dir, "hyperparams.json"), "w") as f:
         json.dump(vars(args), f, indent=4)
@@ -534,7 +539,7 @@ def main():
     for epoch in range(1, args.epochs + 1):
         total_loss = 0.0
         pbar = tqdm(loader, desc=f"Epoch {epoch}/{args.epochs}")
-        for imgs, acts in pbar:
+        for batch_idx, (imgs, acts) in enumerate(pbar):
             B, T, C, H, W = imgs.shape
             # -----  ground-truth embeddings for t=0…T-1 -----------------------------
             with torch.no_grad():
@@ -562,6 +567,9 @@ def main():
             optimizer.step()
             # update learning rate scheduler each step
             scheduler.step()
+            # log batch stats to wandb
+            global_step = (epoch - 1) * len(loader) + batch_idx
+            wandb.log({"batch_loss": loss.item(), "learning_rate": optimizer.param_groups[0]['lr']}, step=global_step)
             total_loss += loss.item() * B
             pbar.set_postfix({'loss': loss.item()})
         avg_loss = total_loss / len(dataset)
@@ -611,6 +619,9 @@ def main():
         plt.ylabel("Loss")
         plt.legend()
         plt.savefig(os.path.join(run_dir, f"loss_plot_epoch_{epoch}.png"))
+        # log loss plot image to wandb
+        plot_path = os.path.join(run_dir, f"loss_plot_epoch_{epoch}.png")
+        wandb.log({"loss_plot": wandb.Image(plot_path)}, step=epoch)
         plt.close()
 
     # save final model
