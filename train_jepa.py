@@ -17,6 +17,11 @@ from PIL import Image
 from tqdm import tqdm
 from einops import rearrange, repeat
 from torch.optim.lr_scheduler import LambdaLR
+import json
+import datetime
+import subprocess
+import matplotlib.pyplot as plt
+import wandb
 
 # helper functions for learning rate schedule and latent normalization
 def linear_warmup_decay(warmup_steps, total_steps):
@@ -431,7 +436,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32, help="training batch size")
     parser.add_argument("--num-hist", type=int, default=16, help="history frames for JEPA prediction")
     parser.add_argument("--num-pred", type=int, default=1, help="number of prediction frames (unused currently)")
-    parser.add_argument("--lr", type=float, default=2e-4, help="learning rate")
+    parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
     parser.add_argument("--action-emb-dim", type=int, default=4, help="dimension of action embeddings")
     parser.add_argument("--encoder-name", type=str, default="dinov2_vits14", help="DINO-V2 encoder variant (dinov2_vits14, etc)")
     parser.add_argument("--feature-key", type=str, default="x_norm_patchtokens", choices=["x_norm_patchtokens","x_norm_clstoken"], help="encoder output feature key")
@@ -439,8 +444,8 @@ def main():
     parser.add_argument("--predictor-heads", type=int, default=4, help="number of attention heads in predictor")
     parser.add_argument("--predictor-dim-head", type=int, default=32, help="dimensionality of each attention head in predictor")
     parser.add_argument("--predictor-mlp-dim", type=int, default=512, help="MLP hidden dimension in predictor")
-    parser.add_argument("--predictor-dropout", type=float, default=0.0, help="dropout rate in predictor transformer")
-    parser.add_argument("--predictor-emb-dropout", type=float, default=0.0, help="dropout on predictor input embeddings")
+    parser.add_argument("--predictor-dropout", type=float, default=0, help="dropout rate in predictor transformer")
+    parser.add_argument("--predictor-emb-dropout", type=float, default=0, help="dropout on predictor input embeddings")
     parser.add_argument("--predictor-pool", type=str, default="mean", choices=["cls","mean","attn"], help="pooling strategy for predictor output (mean, cls, attn)")
     parser.add_argument(
         "--save-path", type=str, default="jepa_model_small_16hist_no_teacher_forcing.pth"
@@ -449,6 +454,7 @@ def main():
     parser.add_argument("--no-teacher-forcing", action="store_true", help="Disable teacher forcing (predict current frame instead of next)")
     parser.add_argument("--vicreg", action="store_true", help="Use VICReg loss")
     parser.add_argument("--sched-sample-prob", type=float, default=1.0, help="Scheduled sampling: probability of using model prediction instead of ground truth for next input")
+    parser.add_argument("--output-dir", type=str, default="runs", help="Directory to save run outputs (checkpoints, logs, plots)")
     args = parser.parse_args()
 
     # transforms for DINO-V2
@@ -504,6 +510,18 @@ def main():
     ))
     # training
     model.train()
+    # create run directory
+    os.makedirs(args.output_dir, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir = os.path.join(args.output_dir, f"run_{timestamp}")
+    os.makedirs(run_dir, exist_ok=True)
+    # initialize wandb run
+    wandb.init(project="jepa", dir=run_dir, config=vars(args), name=f"run_{timestamp}")
+    # save hyperparameters
+    with open(os.path.join(run_dir, "hyperparams.json"), "w") as f:
+        json.dump(vars(args), f, indent=4)
+    # initialize history dict for plotting probing losses
+    history = {}
 
     for epoch in range(1, args.epochs + 1):
         total_loss = 0.0
@@ -540,13 +558,61 @@ def main():
             pbar.set_postfix({'loss': loss.item()})
         avg_loss = total_loss / len(dataset)
         print(f"Epoch {epoch}/{args.epochs} - loss: {avg_loss:.6f}")
+        # log training loss to wandb
+        wandb.log({"train_loss": avg_loss}, step=epoch)
+        # save model checkpoint for this epoch
+        epoch_path = os.path.join(run_dir, f"model_epoch_{epoch}.pth")
+        torch.save(model.state_dict(), epoch_path)
+        print(f"Saved JEPA model to {epoch_path}")
+        # evaluate using probing script
+        eval_log = os.path.join(run_dir, f"eval_epoch_{epoch}.txt")
+        cmd = [
+            "python", "main.py",
+            "--checkpoint", epoch_path,
+            "--encoder-name", args.encoder_name,
+            "--feature-key", args.feature_key,
+            "--num-hist", str(args.num_hist),
+            "--predictor-depth", str(args.predictor_depth),
+            "--predictor-heads", str(args.predictor_heads),
+            "--predictor-dim-head", str(args.predictor_dim_head),
+            "--predictor-mlp-dim", str(args.predictor_mlp_dim),
+            "--predictor-dropout", str(args.predictor_dropout),
+            "--predictor-emb-dropout", str(args.predictor_emb_dropout),
+            "--predictor-pool", args.predictor_pool,
+        ]
+        with open(eval_log, "w") as f:
+            subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+        # parse eval log to extract losses
+        losses = {}
+        with open(eval_log) as f:
+            for line in f:
+                if " loss:" in line:
+                    parts = line.strip().split()
+                    losses[parts[0]] = float(parts[-1])
+        # log evaluation losses to wandb
+        eval_metrics = {f"{k}_loss": v for k, v in losses.items()}
+        wandb.log(eval_metrics, step=epoch)
+        # update history
+        for attr, val in losses.items():
+            history.setdefault(attr, []).append(val)
+        # plot probing losses
+        plt.figure()
+        for attr, vals in history.items():
+            plt.plot(range(1, epoch+1), vals, label=attr)
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.legend()
+        plt.savefig(os.path.join(run_dir, f"loss_plot_epoch_{epoch}.png"))
+        plt.close()
 
     # save final model
     torch.save(model.state_dict(), args.save_path)
     print(f"Saved JEPA model to {args.save_path}")
+    # finish wandb run
+    wandb.finish()
 
 # Add VICReg loss function
-def vicreg_loss(x, y, sim_coeff=25.0, var_coeff=25.0, cov_coeff=1.0, eps=1e-4):
+def vicreg_loss(x, y, sim_coeff=1.0, var_coeff=1.0, cov_coeff=0.01, eps=1e-4):
     """
     Compute VICReg loss between representations x and y.
     """
