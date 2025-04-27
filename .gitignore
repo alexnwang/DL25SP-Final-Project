@@ -9,7 +9,7 @@ dino_cache/
 scripts/
 dino_wm-main/
 
-logs/*
-wandb_tmp/*
-runs/*
-wandb/*
+logs/
+wandb_tmp/
+runs/
+wandb/
