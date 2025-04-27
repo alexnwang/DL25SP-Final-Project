@@ -11,4 +11,5 @@ dino_wm-main/
 
 logs/*
 wandb_tmp/*
-runs/
+runs/*
+wandb/*
