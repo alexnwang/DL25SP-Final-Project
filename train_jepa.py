@@ -21,6 +21,14 @@ import json
 import datetime
 import subprocess
 import matplotlib.pyplot as plt
+from typing import Optional
+# configure wandb directories before importing wandb to avoid permission issues
+os.environ['WANDB_DIR'] = '/gpfs/scratch/wz1492/DL25SP-Final-Project/wandb_tmp'
+os.environ['WANDB_CONFIG_DIR'] = os.environ['WANDB_DIR']
+os.environ['XDG_CONFIG_HOME'] = os.environ['WANDB_DIR']
+# create directories
+os.makedirs(os.environ['WANDB_DIR'], exist_ok=True)
+os.makedirs(os.environ['WANDB_CONFIG_DIR'], exist_ok=True)
 import wandb
 
 # helper functions for learning rate schedule and latent normalization
@@ -311,8 +319,8 @@ class JEPAWrapper(nn.Module):
     def rollout(self,
         init_frame: torch.Tensor,      # (B,1,3,H,W)
         actions:    torch.Tensor,      # (B,T-1,2)
-        truth_embeddings: torch.Tensor = None,  # (B,T,num_patches,embed_dim)
-        sched_sample_prob: float = 1.0):         # probability of using model's prediction instead of ground truth
+        truth_embeddings: Optional[torch.Tensor] = None,  # (B,T,num_patches,embed_dim)
+        sched_sample_prob: float = 1.0) -> torch.Tensor:  # probability of using model's prediction instead of ground truth
         """
         Autoregressively predicts embeddings for all future steps with optional scheduled sampling.
         Returns: (B, T, num_patches, embed_dim) – the first slice (t=0)

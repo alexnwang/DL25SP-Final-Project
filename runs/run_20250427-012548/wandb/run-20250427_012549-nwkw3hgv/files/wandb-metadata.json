@@ -1,0 +1,40 @@
+{
+    "os": "Linux-4.18.0-477.27.1.el8_8.x86_64-x86_64-with-glibc2.28",
+    "python": "3.9.19",
+    "heartbeatAt": "2025-04-27T05:25:51.470021",
+    "startedAt": "2025-04-27T05:25:49.927281",
+    "docker": null,
+    "gpu": "Tesla V100-SXM2-16GB",
+    "gpu_count": 1,
+    "cpu_count": 40,
+    "cuda": null,
+    "args": [
+        "--data-dir",
+        "/gpfs/scratch/wz1492/data/train",
+        "--sched-sample-prob",
+        "0",
+        "--save-path",
+        "jepa_model_small_sam_0_vicreg.pth",
+        "--vicreg",
+        "--epochs",
+        "50",
+        "--lr",
+        "1e-4",
+        "--predictor-pool",
+        "attn",
+        "--batch-size",
+        "32"
+    ],
+    "state": "running",
+    "program": "/gpfs/scratch/wz1492/DL25SP-Final-Project/train_jepa.py",
+    "codePath": "train_jepa.py",
+    "git": {
+        "remote": "https://github.com/Sir-Teo/DL25SP-Final-Project.git",
+        "commit": "44533d0efeb5e2b814330b05145c5c719b92a271"
+    },
+    "email": "zengwc.teo2016@outlook.com",
+    "root": "/gpfs/scratch/wz1492/DL25SP-Final-Project",
+    "host": "gpu-0003",
+    "username": "wz1492",
+    "executable": "/gpfs/scratch/wz1492/miniconda3/envs/dino_wm/bin/python"
+}

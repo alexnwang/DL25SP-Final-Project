@@ -1,0 +1,17 @@
+2025-04-27 01:09:54,701 INFO    MainThread:145741 [wandb_setup.py:_flush():76] Configure stats pid to 145741
+2025-04-27 01:09:54,701 INFO    MainThread:145741 [wandb_setup.py:_flush():76] Loading settings from /gpfs/home/wz1492/.config/wandb/settings
+2025-04-27 01:09:54,701 INFO    MainThread:145741 [wandb_setup.py:_flush():76] Loading settings from wandb/settings
+2025-04-27 01:09:54,701 INFO    MainThread:145741 [wandb_setup.py:_flush():76] Loading settings from environment variables: {'_require_service': 'True', 'root_dir': '/gpfs/scratch/wz1492/DL25SP-Final-Project/wandb_tmp'}
+2025-04-27 01:09:54,702 INFO    MainThread:145741 [wandb_setup.py:_flush():76] Inferring run settings from compute environment: {'program_relpath': 'train_jepa.py', 'program': '/gpfs/scratch/wz1492/DL25SP-Final-Project/train_jepa.py'}
+2025-04-27 01:09:54,702 INFO    MainThread:145741 [wandb_init.py:_log_setup():461] Logging user logs to runs/run_20250427-010953/wandb/run-20250427_010954-vkkj6lcy/logs/debug.log
+2025-04-27 01:09:54,702 INFO    MainThread:145741 [wandb_init.py:_log_setup():462] Logging internal logs to runs/run_20250427-010953/wandb/run-20250427_010954-vkkj6lcy/logs/debug-internal.log
+2025-04-27 01:09:54,702 INFO    MainThread:145741 [wandb_init.py:init():495] calling init triggers
+2025-04-27 01:09:54,702 INFO    MainThread:145741 [wandb_init.py:init():498] wandb.init called with sweep_config: {}
+config: {'data_dir': '/gpfs/scratch/wz1492/data/train', 'epochs': 50, 'batch_size': 32, 'num_hist': 16, 'num_pred': 1, 'lr': 0.0001, 'action_emb_dim': 4, 'encoder_name': 'dinov2_vits14', 'feature_key': 'x_norm_patchtokens', 'predictor_depth': 4, 'predictor_heads': 4, 'predictor_dim_head': 32, 'predictor_mlp_dim': 512, 'predictor_dropout': 0, 'predictor_emb_dropout': 0, 'predictor_pool': 'attn', 'save_path': 'jepa_model_small_sam_1_mse.pth', 'num_workers': 4, 'no_teacher_forcing': False, 'vicreg': False, 'sched_sample_prob': 1.0, 'output_dir': 'runs'}
+2025-04-27 01:09:54,702 INFO    MainThread:145741 [wandb_init.py:init():548] starting backend
+2025-04-27 01:09:54,702 INFO    MainThread:145741 [wandb_init.py:init():552] setting up manager
+2025-04-27 01:09:54,705 INFO    MainThread:145741 [backend.py:_multiprocessing_setup():97] multiprocessing start_methods=fork,spawn,forkserver, using: spawn
+2025-04-27 01:09:54,708 INFO    MainThread:145741 [wandb_init.py:init():558] backend started and connected
+2025-04-27 01:09:54,713 INFO    MainThread:145741 [wandb_init.py:init():636] updated telemetry
+2025-04-27 01:09:54,759 INFO    MainThread:145741 [wandb_init.py:init():667] communicating run to backend with 30 second timeout
+2025-04-27 01:09:57,743 WARNING MsgRouterThr:145741 [router.py:message_loop():76] message_loop has been closed

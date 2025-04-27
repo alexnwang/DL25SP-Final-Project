@@ -1,0 +1,60 @@
+2025-04-27 01:25:49,946 INFO    StreamThr :1820411 [internal.py:wandb_internal():90] W&B internal server running at pid: 1820411, started at: 2025-04-27 01:25:49.944867
+2025-04-27 01:25:49,947 DEBUG   HandlerThread:1820411 [handler.py:handle_request():141] handle_request: status
+2025-04-27 01:25:49,949 DEBUG   SenderThread:1820411 [sender.py:send_request():316] send_request: status
+2025-04-27 01:25:49,950 DEBUG   SenderThread:1820411 [sender.py:send():302] send: header
+2025-04-27 01:25:49,951 INFO    WriterThread:1820411 [datastore.py:open_for_write():75] open: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/run-2m08xkju.wandb
+2025-04-27 01:25:49,992 DEBUG   SenderThread:1820411 [sender.py:send():302] send: run
+2025-04-27 01:25:50,256 DEBUG   HandlerThread:1820411 [handler.py:handle_request():141] handle_request: check_version
+2025-04-27 01:25:50,272 INFO    SenderThread:1820411 [dir_watcher.py:__init__():216] watching files in: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files
+2025-04-27 01:25:50,272 INFO    SenderThread:1820411 [sender.py:_start_run_threads():913] run started: 2m08xkju with start time 1745731549.94011
+2025-04-27 01:25:50,273 DEBUG   SenderThread:1820411 [sender.py:send():302] send: summary
+2025-04-27 01:25:50,273 INFO    SenderThread:1820411 [sender.py:_save_file():1156] saving file wandb-summary.json with policy end
+2025-04-27 01:25:50,274 DEBUG   SenderThread:1820411 [sender.py:send_request():316] send_request: check_version
+2025-04-27 01:25:50,335 DEBUG   HandlerThread:1820411 [handler.py:handle_request():141] handle_request: run_start
+2025-04-27 01:25:50,358 DEBUG   HandlerThread:1820411 [meta.py:__init__():35] meta init
+2025-04-27 01:25:50,358 DEBUG   HandlerThread:1820411 [meta.py:__init__():50] meta init done
+2025-04-27 01:25:50,358 DEBUG   HandlerThread:1820411 [meta.py:probe():216] probe
+2025-04-27 01:25:50,379 DEBUG   HandlerThread:1820411 [meta.py:_setup_git():206] setup git
+2025-04-27 01:25:50,408 DEBUG   HandlerThread:1820411 [meta.py:_setup_git():213] setup git done
+2025-04-27 01:25:50,408 DEBUG   HandlerThread:1820411 [meta.py:_save_pip():54] save pip
+2025-04-27 01:25:50,409 DEBUG   HandlerThread:1820411 [meta.py:_save_pip():68] save pip done
+2025-04-27 01:25:50,410 DEBUG   HandlerThread:1820411 [meta.py:_save_conda():75] save conda
+2025-04-27 01:25:51,275 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_created():275] file/dir created: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/wandb-summary.json
+2025-04-27 01:25:51,275 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_created():275] file/dir created: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/conda-environment.yaml
+2025-04-27 01:25:51,275 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_created():275] file/dir created: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/requirements.txt
+2025-04-27 01:26:02,283 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/conda-environment.yaml
+2025-04-27 01:26:02,348 DEBUG   HandlerThread:1820411 [meta.py:_save_conda():85] save conda done
+2025-04-27 01:26:02,348 DEBUG   HandlerThread:1820411 [meta.py:probe():254] probe done
+2025-04-27 01:26:02,654 DEBUG   HandlerThread:1820411 [handler.py:handle_request():141] handle_request: stop_status
+2025-04-27 01:26:02,655 DEBUG   SenderThread:1820411 [sender.py:send_request():316] send_request: stop_status
+2025-04-27 01:26:02,751 DEBUG   SenderThread:1820411 [sender.py:send():302] send: telemetry
+2025-04-27 01:26:02,753 DEBUG   SenderThread:1820411 [sender.py:send():302] send: files
+2025-04-27 01:26:02,753 INFO    SenderThread:1820411 [sender.py:_save_file():1156] saving file wandb-metadata.json with policy now
+2025-04-27 01:26:03,058 INFO    Thread-16 :1820411 [upload_job.py:push():138] Uploaded file /tmp/tmpko4d75p2wandb/lg2o5sv3-wandb-metadata.json
+2025-04-27 01:26:03,283 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_created():275] file/dir created: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:03,283 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_created():275] file/dir created: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/wandb-metadata.json
+2025-04-27 01:26:05,284 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:07,285 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:09,286 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:11,287 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:13,288 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:15,289 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:15,340 DEBUG   HandlerThread:1820411 [handler.py:handle_request():141] handle_request: stop_status
+2025-04-27 01:26:15,341 DEBUG   SenderThread:1820411 [sender.py:send_request():316] send_request: stop_status
+2025-04-27 01:26:17,290 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:18,860 DEBUG   SenderThread:1820411 [sender.py:send():302] send: stats
+2025-04-27 01:26:19,291 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:20,292 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/config.yaml
+2025-04-27 01:26:21,293 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:23,293 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:25,294 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:27,295 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:29,296 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:30,528 DEBUG   HandlerThread:1820411 [handler.py:handle_request():141] handle_request: stop_status
+2025-04-27 01:26:30,529 DEBUG   SenderThread:1820411 [sender.py:send_request():316] send_request: stop_status
+2025-04-27 01:26:31,297 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:33,298 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:35,299 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:37,300 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:39,301 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
+2025-04-27 01:26:41,302 INFO    Thread-12 :1820411 [dir_watcher.py:_on_file_modified():292] file/dir modified: runs/run_20250427-012548/wandb/run-20250427_012549-2m08xkju/files/output.log
