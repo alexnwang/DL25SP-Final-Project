@@ -27,22 +27,11 @@ python train_jepa.py \
     --lr 1e-4 \
     --predictor-pool attn \
     --batch-size 32 \
-    --predictor-depth 8 \
-    --predictor-heads 8 \
-    --predictor-dim-head 64 \
-    --predictor-mlp-dim 2048 \
-    --predictor-dropout 0.1 \
-    --predictor-emb-dropout 0.1 \
+
 
 
 python main.py \
     --predictor-pool attn \
     --checkpoint jepa_model_small_sam_1_mse.pth \
     --predictor-pool attn \
-    --predictor-depth 8 \
-    --predictor-heads 8 \
-    --predictor-dim-head 64 \
-    --predictor-mlp-dim 2048 \
-    --predictor-dropout 0.1 \
-    --predictor-emb-dropout 0.1 \
 

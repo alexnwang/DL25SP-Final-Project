@@ -454,7 +454,7 @@ def main():
     parser.add_argument("--predictor-mlp-dim", type=int, default=512, help="MLP hidden dimension in predictor")
     parser.add_argument("--predictor-dropout", type=float, default=0, help="dropout rate in predictor transformer")
     parser.add_argument("--predictor-emb-dropout", type=float, default=0, help="dropout on predictor input embeddings")
-    parser.add_argument("--predictor-pool", type=str, default="mean", choices=["cls","mean","attn"], help="pooling strategy for predictor output (mean, cls, attn)")
+    parser.add_argument("--predictor-pool", type=str, default="attn", choices=["cls","mean","attn"], help="pooling strategy for predictor output (mean, cls, attn)")
     parser.add_argument(
         "--save-path", type=str, default="jepa_model_small_16hist_no_teacher_forcing.pth"
     )
@@ -463,6 +463,7 @@ def main():
     parser.add_argument("--vicreg", action="store_true", help="Use VICReg loss")
     parser.add_argument("--sched-sample-prob", type=float, default=1.0, help="Scheduled sampling: probability of using model prediction instead of ground truth for next input")
     parser.add_argument("--output-dir", type=str, default="runs", help="Directory to save run outputs (checkpoints, logs, plots)")
+    parser.add_argument("--run-name", type=str, default=None, help="Name for wandb run")
     args = parser.parse_args()
 
     # transforms for DINO-V2
@@ -519,12 +520,16 @@ def main():
     # training
     model.train()
     # create run directory
-    os.makedirs(args.output_dir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = os.path.join(args.output_dir, f"run_{timestamp}")
     os.makedirs(run_dir, exist_ok=True)
+    # define run name based on argument or timestamp
+    if args.run_name is not None:
+        run_name = args.run_name
+    else:
+        run_name = f"run_{timestamp}"
     # initialize wandb run
-    wandb.init(project="jepa", dir=run_dir, config=vars(args), name=f"run_{timestamp}")
+    wandb.init(project="jepa-0427", dir=run_dir, config=vars(args), name=run_name)
     # watch model parameters and gradients in wandb
     wandb.watch(model, log="all", log_freq=100)
     # log dataset size and total trainable parameters to wandb config
@@ -533,8 +538,6 @@ def main():
     # save hyperparameters
     with open(os.path.join(run_dir, "hyperparams.json"), "w") as f:
         json.dump(vars(args), f, indent=4)
-    # initialize history dict for plotting probing losses
-    history = {}
 
     for epoch in range(1, args.epochs + 1):
         total_loss = 0.0
@@ -574,55 +577,16 @@ def main():
             pbar.set_postfix({'loss': loss.item()})
         avg_loss = total_loss / len(dataset)
         print(f"Epoch {epoch}/{args.epochs} - loss: {avg_loss:.6f}")
-        # log training loss to wandb
-        wandb.log({"train_loss": avg_loss}, step=epoch)
+        # log training loss and relevant metrics to wandb
+        wandb.log({
+            "epoch": epoch,
+            "train_loss": avg_loss,
+            "learning_rate": optimizer.param_groups[0]['lr'],
+        }, step=epoch)
         # save model checkpoint for this epoch
         epoch_path = os.path.join(run_dir, f"model_epoch_{epoch}.pth")
         torch.save(model.state_dict(), epoch_path)
         print(f"Saved JEPA model to {epoch_path}")
-        # evaluate using probing script
-        eval_log = os.path.join(run_dir, f"eval_epoch_{epoch}.txt")
-        cmd = [
-            "python", "main.py",
-            "--checkpoint", epoch_path,
-            "--encoder-name", args.encoder_name,
-            "--feature-key", args.feature_key,
-            "--num-hist", str(args.num_hist),
-            "--predictor-depth", str(args.predictor_depth),
-            "--predictor-heads", str(args.predictor_heads),
-            "--predictor-dim-head", str(args.predictor_dim_head),
-            "--predictor-mlp-dim", str(args.predictor_mlp_dim),
-            "--predictor-dropout", str(args.predictor_dropout),
-            "--predictor-emb-dropout", str(args.predictor_emb_dropout),
-            "--predictor-pool", args.predictor_pool,
-        ]
-        with open(eval_log, "w") as f:
-            subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
-        # parse eval log to extract losses
-        losses = {}
-        with open(eval_log) as f:
-            for line in f:
-                if " loss:" in line:
-                    parts = line.strip().split()
-                    losses[parts[0]] = float(parts[-1])
-        # log evaluation losses to wandb
-        eval_metrics = {f"{k}_loss": v for k, v in losses.items()}
-        wandb.log(eval_metrics, step=epoch)
-        # update history
-        for attr, val in losses.items():
-            history.setdefault(attr, []).append(val)
-        # plot probing losses
-        plt.figure()
-        for attr, vals in history.items():
-            plt.plot(range(1, epoch+1), vals, label=attr)
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.legend()
-        plt.savefig(os.path.join(run_dir, f"loss_plot_epoch_{epoch}.png"))
-        # log loss plot image to wandb
-        plot_path = os.path.join(run_dir, f"loss_plot_epoch_{epoch}.png")
-        wandb.log({"loss_plot": wandb.Image(plot_path)}, step=epoch)
-        plt.close()
 
     # save final model
     torch.save(model.state_dict(), args.save_path)

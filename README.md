@@ -124,6 +124,37 @@ Probing val datasets can be found in `/scratch/DL25SP/probe_normal/val` and `/sc
 ### Training
 Please implement your own training script and model architecture as a part of this existing codebase.
 
+A sample training script `train_jepa.py` is provided. This script trains a JEPA model using DINO-V2 patch embeddings as the encoder and a Vision Transformer (ViT) based predictor.
+
+**Key Features:**
+- **Encoder:** Uses pre-trained DINO-V2 models (`dinov2_vits14` by default) to extract patch embeddings. The `--feature-key` argument selects between patch tokens (`x_norm_patchtokens`) or the CLS token (`x_norm_clstoken`). The encoder is frozen during training.
+- **Predictor:** A ViT-based transformer that takes a sequence of historical patch embeddings and action embeddings to predict future patch embeddings. Hyperparameters like depth, heads, MLP dimension, and dropout can be configured via command-line arguments.
+- **Actions:** Actions are embedded using a 1D convolution and concatenated as special tokens to the patch sequence.
+- **Dataset:** Uses a `JEPATrainDataset` that creates sliding windows of `num_hist + num_pred` frames from the raw trajectory data. It handles the 2-channel input by duplicating the first channel to create a 3-channel image suitable for DINO-V2.
+- **Training Loop:**
+    - Uses Adam optimizer and a linear warmup/decay learning rate scheduler.
+    - Supports Mean Squared Error (MSE) loss by default or VICReg loss (`--vicreg` flag).
+    - Implements model rollout with optional scheduled sampling (`--sched-sample-prob` argument) to control the probability of using the model's own prediction versus the ground truth embedding as input for the next step.
+    - Logs metrics using `wandb` (Weights & Biases). Ensure `WANDB_DIR`, `WANDB_CONFIG_DIR`, and `XDG_CONFIG_HOME` environment variables are set to a writable directory (e.g., within your scratch space).
+    - Saves model checkpoints per epoch and a final model.
+
+**Usage:**
+```bash
+python train_jepa.py \
+    --data-dir /path/to/your/data \
+    --output-dir ./runs \
+    --run-name my_jepa_run \
+    --epochs 10 \
+    --batch-size 32 \
+    --num-hist 16 \
+    --lr 1e-4 \
+    --predictor-depth 4 \
+    --predictor-heads 4 \
+    # ... other arguments ...
+```
+
+Refer to the script's `argparse` section for a full list of configurable options. You can modify this script or create your own based on your chosen JEPA architecture and training strategy.
+
 
 ### Evaluation
 The probing evaluation is already implemented for you. It's inside `main.py`. You just need to add change some code marked by #TODOs, namely initialize, load your model. You can also change how your model handle forward pass marked by #TODOs inside `evaluator.py`. **DO NOT** change any other parts of `main.py` and `evaluator.py`.

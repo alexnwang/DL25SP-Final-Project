@@ -6,7 +6,6 @@ __pycache__/
 *.pt.tar.gz
 *.pt.tar.gz.part
 dino_cache/
-scripts/
 dino_wm-main/
 
 logs/
