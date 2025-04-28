@@ -8,7 +8,7 @@
 #SBATCH --time=3-00:00:00
 #SBATCH --job-name=hcc
 #SBATCH --output=/gpfs/scratch/wz1492/DL25SP-Final-Project/logs/hparam_search_%A_%a.out
-#SBATCH --array=1-20%10
+#SBATCH --array=1-10%5
 
 # load modules and environment
 module load gcc/8.1.0
@@ -19,7 +19,7 @@ conda activate dino_wm
 seed=$((SLURM_ARRAY_TASK_ID + 1000))
 
 # define ViT size categories
-sizes=(tiny small base large)
+sizes=(tiny small super_tiny)
 # randomly choose one size category
 size=${sizes[$((RANDOM % ${#sizes[@]}))]}
 
@@ -46,19 +46,19 @@ case $size in
 esac
 
 # randomly pick dropout rate
-dropouts=(0.0 0.05 0.1)
+dropouts=(0.0 0.05)
 dropout=${dropouts[$((RANDOM % ${#dropouts[@]}))]}
 
 # randomly pick scheduled sampling probability
-sched_probs=(0.3 0.5 0.7 1.0)
+sched_probs=(0.3 0.5 0.7)
 sched_prob=${sched_probs[$((RANDOM % ${#sched_probs[@]}))]}
 
 # define learning rate options and random selection
-lrs=(1e-5 5e-5 1e-4 5e-4)
+lrs=(1e-5 5e-5 1e-4)
 lr=${lrs[$((RANDOM % ${#lrs[@]}))]}
 
-# construct run name from hyperparameters
-run_name="size-${size}_d${depth}_h${heads}_hd${dim_head}_mlp${mlp_dim}_do${dropout}_sched${sched_prob}_lr${lr}_seed${seed}"
+# construct run name from hyperparameters and task ID
+run_name="task${SLURM_ARRAY_TASK_ID}_size-${size}_d${depth}_h${heads}_hd${dim_head}_mlp${mlp_dim}_do${dropout}_sched${sched_prob}_lr${lr}_seed${seed}"
 
 # set batch size based on size
 if [ "$size" = "base" ]; then
@@ -67,8 +67,12 @@ else
   batch_size=32
 fi
 
+# create unique directory for this run
+output_dir="/gpfs/scratch/wz1492/DL25SP-Final-Project/runs/${SLURM_JOB_ID}/${run_name}"
+mkdir -p $output_dir
+
 # display chosen configuration
-echo "Task $SLURM_ARRAY_TASK_ID | Size: $size | depth=$depth | heads=$heads | dim_head=$dim_head | mlp_dim=$mlp_dim | dropout=$dropout | sched_sample_prob=$sched_prob | lr=$lr | vicreg=$vicreg_name | seed=$seed"
+echo "Task $SLURM_ARRAY_TASK_ID | Size: $size | depth=$depth | heads=$heads | dim_head=$dim_head | mlp_dim=$mlp_dim | dropout=$dropout | sched_sample_prob=$sched_prob | lr=$lr | vicreg=$vicreg_name | seed=$seed | Output Dir: $output_dir"
 
 # run training
 python train_jepa.py \
@@ -85,4 +89,4 @@ python train_jepa.py \
   --predictor-emb-dropout $dropout \
   --sched-sample-prob $sched_prob \
   --run-name $run_name \
-  --save-path /gpfs/scratch/wz1492/DL25SP-Final-Project/checkpoints/${run_name}.pth 
+  --output-dir ${output_dir} 

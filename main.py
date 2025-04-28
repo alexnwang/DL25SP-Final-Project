@@ -104,7 +104,7 @@ if __name__ == "__main__":
     parser.add_argument("--predictor-mlp-dim", type=int, default=512, help="MLP hidden dimension in predictor")
     parser.add_argument("--predictor-dropout", type=float, default=0.0, help="dropout rate in predictor transformer")
     parser.add_argument("--predictor-emb-dropout", type=float, default=0.0, help="dropout on predictor input embeddings")
-    parser.add_argument("--predictor-pool", type=str, default="mean", choices=["cls","mean","attn"], help="predictor pool used in training (mean, cls, attn)")
+    parser.add_argument("--predictor-pool", type=str, default="attn", choices=["cls","mean","attn"], help="predictor pool used in training (mean, cls, attn)")
     args = parser.parse_args()
     device = get_device()
     model = load_model(device, args)

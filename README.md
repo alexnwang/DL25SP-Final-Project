@@ -152,7 +152,6 @@ python train_jepa.py \
     --predictor-heads 4 \
     # ... other arguments ...
 ```
-
 Refer to the script's `argparse` section for a full list of configurable options. You can modify this script or create your own based on your chosen JEPA architecture and training strategy.
 
 
@@ -165,3 +164,4 @@ There will be a total of **four** evaluation settings for this project. However,
 
 ### Submission
 Details to come.
+

@@ -414,8 +414,8 @@ class JEPATrainDataset(Dataset):
         start = idx % per_traj
         end = start + self.window
         # load window
-        frames = self.states[traj_idx, start:end]  # (W, C, H, W)
-        acts = self.actions[traj_idx, start:end - 1]  # (W-1, 2)
+        frames = self.states[traj_idx, start:end].copy()  # (W, C, H, W)
+        acts = self.actions[traj_idx, start:end - 1].copy()  # (W-1, 2)
         # to torch and scale
         frames = torch.from_numpy(frames).float() / 255.0
         # build 3-channel images: first two channels + duplicate channel0
@@ -456,13 +456,12 @@ def main():
     parser.add_argument("--predictor-emb-dropout", type=float, default=0, help="dropout on predictor input embeddings")
     parser.add_argument("--predictor-pool", type=str, default="attn", choices=["cls","mean","attn"], help="pooling strategy for predictor output (mean, cls, attn)")
     parser.add_argument(
-        "--save-path", type=str, default="jepa_model_small_16hist_no_teacher_forcing.pth"
+        "--num-workers", type=int, default=4
     )
-    parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--no-teacher-forcing", action="store_true", help="Disable teacher forcing (predict current frame instead of next)")
     parser.add_argument("--vicreg", action="store_true", help="Use VICReg loss")
     parser.add_argument("--sched-sample-prob", type=float, default=1.0, help="Scheduled sampling: probability of using model prediction instead of ground truth for next input")
-    parser.add_argument("--output-dir", type=str, default="runs", help="Directory to save run outputs (checkpoints, logs, plots)")
+    parser.add_argument("--output-dir", type=str, required=True, help="Directory to save run outputs (checkpoints, logs, plots)")
     parser.add_argument("--run-name", type=str, default=None, help="Name for wandb run")
     args = parser.parse_args()
 
@@ -520,16 +519,15 @@ def main():
     # training
     model.train()
     # create run directory
-    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir = os.path.join(args.output_dir, f"run_{timestamp}")
+    run_dir = args.output_dir # Use the directory provided by sbatch
     os.makedirs(run_dir, exist_ok=True)
     # define run name based on argument or timestamp
     if args.run_name is not None:
         run_name = args.run_name
     else:
-        run_name = f"run_{timestamp}"
+        run_name = f"run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
     # initialize wandb run
-    wandb.init(project="jepa-0427", dir=run_dir, config=vars(args), name=run_name)
+    wandb.init(project="jepa-final3", dir=run_dir, config=vars(args), name=run_name)
     # watch model parameters and gradients in wandb
     wandb.watch(model, log="all", log_freq=100)
     # log dataset size and total trainable parameters to wandb config
@@ -589,8 +587,9 @@ def main():
         print(f"Saved JEPA model to {epoch_path}")
 
     # save final model
-    torch.save(model.state_dict(), args.save_path)
-    print(f"Saved JEPA model to {args.save_path}")
+    final_save_path = os.path.join(run_dir, "final_checkpoint.pth")
+    torch.save(model.state_dict(), final_save_path)
+    print(f"Saved final JEPA model to {final_save_path}")
     # finish wandb run
     wandb.finish()
 
