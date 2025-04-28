@@ -46,11 +46,14 @@ def load_data(device):
 
 def load_model():
     """Load or initialize the model."""
-    # TODO: Replace MockModel with your trained model
-    from models import MockModel
+    from models import JEPA
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = MockModel(device=device).to(device)
+    model = JEPA()
+    model.load_state_dict(torch.load('model_weights.pth', map_location=device))
+    model = model.to(device)
+    model.eval()
     return model
+
 
 
 def evaluate_model(device, model, probe_train_ds, probe_val_ds):

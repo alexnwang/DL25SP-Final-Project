@@ -1,0 +1,84 @@
+[1mdiff --git a/models.py b/models.py[m
+[1mindex 95ae7b0..216f1fa 100644[m
+[1m--- a/models.py[m
+[1m+++ b/models.py[m
+[36m@@ -5,6 +5,74 @@[m [mfrom torch.nn import functional as F[m
+ import torch[m
+ [m
+ [m
+[32m+[m[32mclass Encoder(nn.Module):[m
+[32m+[m[32m    def __init__(self, repr_dim=256):[m
+[32m+[m[32m        super().__init__()[m
+[32m+[m[32m        self.conv = nn.Sequential([m
+[32m+[m[32m            nn.Conv2d(2, 32, 4, stride=2, padding=1),  # 64x64 -> 32x32[m
+[32m+[m[32m            nn.ReLU(),[m
+[32m+[m[32m            nn.Conv2d(32, 64, 4, stride=2, padding=1),  # 32x32 -> 16x16[m
+[32m+[m[32m            nn.ReLU(),[m
+[32m+[m[32m            nn.Conv2d(64, 128, 4, stride=2, padding=1),  # 16x16 -> 8x8[m
+[32m+[m[32m            nn.ReLU(),[m
+[32m+[m[32m            nn.Flatten(),  # 128*8*8 = 8192[m
+[32m+[m[32m            nn.Linear(8192, repr_dim),[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m    def forward(self, x):[m
+[32m+[m[32m        return self.conv(x)[m
+[32m+[m
+[32m+[m[32mclass Predictor(nn.Module):[m
+[32m+[m[32m    def __init__(self, repr_dim=256, action_dim=2):[m
+[32m+[m[32m        super().__init__()[m
+[32m+[m[32m        self.fc = nn.Sequential([m
+[32m+[m[32m            nn.Linear(repr_dim + action_dim, 512),[m
+[32m+[m[32m            nn.ReLU(),[m
+[32m+[m[32m            nn.Linear(512, repr_dim),[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m    def forward(self, h, a):[m
+[32m+[m[32m        # h: (batch, repr_dim), a: (batch, action_dim)[m
+[32m+[m[32m        x = torch.cat([h, a], dim=-1)[m
+[32m+[m[32m        return self.fc(x)[m
+[32m+[m
+[32m+[m[32mclass JEPA(nn.Module):[m
+[32m+[m[32m    def __init__(self, repr_dim=256):[m
+[32m+[m[32m        super().__init__()[m
+[32m+[m[32m        self.encoder = Encoder(repr_dim=repr_dim)[m
+[32m+[m[32m        self.predictor = Predictor(repr_dim=repr_dim)[m
+[32m+[m
+[32m+[m[32m    def forward(self, states, actions):[m
+[32m+[m[32m        """[m
+[32m+[m[32m        states: (batch, T, 2, 64, 64)[m
+[32m+[m[32m        actions: (batch, T-1, 2)[m
+[32m+[m[32m        """[m
+[32m+[m[32m        B, T, C, H, W = states.shape[m
+[32m+[m[32m        pred_list = [][m
+[32m+[m
+[32m+[m[32m        s = self.encoder(states[:, 0])  # encode o_0[m
+[32m+[m[32m        pred_list.append(s)[m
+[32m+[m
+[32m+[m[32m        for t in range(1, T):[m
+[32m+[m[32m            a = actions[:, t-1]  # a_{t-1}[m
+[32m+[m[32m            s = self.predictor(s, a)  # predict s~_t[m
+[32m+[m[32m            pred_list.append(s)[m
+[32m+[m
+[32m+[m[32m        preds = torch.stack(pred_list, dim=1)  # (B, T, repr_dim)[m
+[32m+[m[32m        return preds[m
+[32m+[m
+[32m+[m[32m    def compute_loss(self, states, actions):[m
+[32m+[m[32m        """[m
+[32m+[m[32m        Energy loss: || s~_t - Enc(o_t) ||^2[m
+[32m+[m[32m        """[m
+[32m+[m[32m        with torch.no_grad():[m
+[32m+[m[32m            target_states = torch.stack([self.encoder(states[:, t]) for t in range(states.shape[1])], dim=1)[m
+[32m+[m
+[32m+[m[32m        preds = self.forward(states, actions)[m
+[32m+[m[32m        loss = F.mse_loss(preds, target_states)[m
+[32m+[m[32m        return loss[m
+[32m+[m
+[32m+[m
+ def build_mlp(layers_dims: List[int]):[m
+     layers = [][m
+     for i in range(len(layers_dims) - 2):[m
+[36m@@ -66,3 +134,4 @@[m [mclass Prober(torch.nn.Module):[m
+     def forward(self, e):[m
+         output = self.prober(e)[m
+         return output[m
+[41m+[m
