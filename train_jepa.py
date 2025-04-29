@@ -216,8 +216,15 @@ class JEPAWrapper(nn.Module):
         self.encoder.eval()
         # record representation dimension
         self.repr_dim = self.encoder.emb_dim
-        # action encoder: 1D conv mapping 2D actions to repr_dim per frame
-        self.action_encoder = nn.Conv1d(in_channels=2, out_channels=self.repr_dim, kernel_size=1, stride=1).to(self.device)
+        # action encoder: temporal Conv1d network mapping 2D action sequences to repr_dim per frame
+        self.action_emb_dim = action_emb_dim
+        self.action_encoder = nn.Sequential(
+            nn.Conv1d(in_channels=2, out_channels=self.action_emb_dim, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Dropout(pred_emb_dropout),
+            nn.Conv1d(in_channels=self.action_emb_dim, out_channels=self.repr_dim, kernel_size=3, padding=1),
+            nn.Dropout(pred_emb_dropout),
+        ).to(self.device)
         # register ImageNet normalization on the correct device
         self.register_buffer('rgb_mean', torch.tensor([0.485,0.456,0.406], device=self.device).view(1,3,1,1))
         self.register_buffer('rgb_std',  torch.tensor([0.229,0.224,0.225], device=self.device).view(1,3,1,1))
@@ -228,6 +235,9 @@ class JEPAWrapper(nn.Module):
         yy, xx = torch.meshgrid(ys, xs)
         coords = torch.stack([xx, yy], dim=-1).view(-1, 2)  # (P,2)
         self.register_buffer('patch_coords', coords)
+        # action token coordinate indicator
+        action_coord = torch.tensor([-1.0, -1.0], device=self.device)
+        self.register_buffer('action_coords', action_coord)
         # combined embedding dimension (DINO-V2 feat dim + coord dim)
         self.embed_dim = self.repr_dim + coords.size(-1)
         # compute number of patches per frame (assume 224x224 input)
@@ -277,13 +287,17 @@ class JEPAWrapper(nn.Module):
         patches = torch.cat([patches, coords.expand_as(patches[...,:1])], dim=-1)  # → embed_dim
 
         # -------- action token ---------------------------------------------------
-        a = actions.permute(0, 2, 1)                        # (B,2,T-1)
-        a_emb = self.action_encoder(a)                      # (B,repr_dim,T-1)
-        pad   = torch.zeros(B, self.repr_dim, 1, device=device)
-        a_emb = torch.cat([a_emb, pad], dim=2)              # (B,repr_dim,T)
-        zeros = torch.zeros(B, 2, T, device=device)
-        a_emb = torch.cat([a_emb, zeros], dim=1)            # (B,embed_dim,T)
-        a_tok = a_emb.permute(0, 2, 1).unsqueeze(2)         # (B,T,1,embed_dim)
+        # embed actions per timestep using temporal Conv1d encoder
+        # actions: (B, T-1, 2) -> permute to (B,2,T-1)
+        a_ts = actions.permute(0, 2, 1)  # (B, 2, T-1)
+        a_emb_ts = self.action_encoder(a_ts)  # (B, repr_dim, T-1)
+        # pad to match T timesteps
+        pad = torch.zeros(B, self.repr_dim, 1, device=device)  # (B, repr_dim, 1)
+        a_emb = torch.cat([a_emb_ts, pad], dim=2)  # (B, repr_dim, T)
+        # add action token coordinate dims
+        coord_act = self.action_coords.view(1, 2, 1).expand(B, 2, T)  # (B,2,T)
+        a_emb = torch.cat([a_emb, coord_act], dim=1)  # (B, embed_dim, T)
+        a_tok = a_emb.permute(0, 2, 1).unsqueeze(2)  # (B, T, 1, embed_dim)
 
         tokens = torch.cat([patches, a_tok], dim=2)         # (B,T,P+1,embed_dim)
         inp    = rearrange(tokens, 'b t p d -> b (t p) d')
@@ -356,12 +370,13 @@ class JEPAWrapper(nn.Module):
             else:
                 latent_input = latent_t
 
-            # 1 embed action_t → shape (B,1,1,embed_dim)
-            a = actions[:,step:step+1].permute(0,2,1)               # (B,2,1)
-            a_emb = self.action_encoder(a)                          # (B,D0,1)
-            zeros = torch.zeros(B, 2, 1, device=device)             # coords = 0
-            a_emb = torch.cat([a_emb, zeros], dim=1)                # (B,D,1)
-            a_emb = a_emb.permute(0,2,1).unsqueeze(2)               # (B,1,1,D)
+            # embed current action token using temporal Conv1d encoder
+            a_ts = actions[:, step:step+1].permute(0, 2, 1)  # (B,2,1)
+            a_emb_ts = self.action_encoder(a_ts)  # (B, repr_dim, 1)
+            # add action token coordinate dims
+            coord_act = self.action_coords.view(1, 2, 1).expand(B, 2, 1)  # (B,2,1)
+            a_emb = torch.cat([a_emb_ts, coord_act], dim=1)  # (B, embed_dim, 1)
+            a_emb = a_emb.permute(0, 2, 1).unsqueeze(2)  # (B, 1, 1, embed_dim)
 
             # 2 concatenate "current latent patches" with that action token
             token_in = torch.cat([latent_input.unsqueeze(1), a_emb], dim=2)  # (B,1,num_patches+1,embed_dim)
@@ -444,7 +459,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32, help="training batch size")
     parser.add_argument("--num-hist", type=int, default=16, help="history frames for JEPA prediction")
     parser.add_argument("--num-pred", type=int, default=1, help="number of prediction frames (unused currently)")
-    parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
+    parser.add_argument("--lr", type=float, default=5e-5, help="learning rate")
     parser.add_argument("--action-emb-dim", type=int, default=4, help="dimension of action embeddings")
     parser.add_argument("--encoder-name", type=str, default="dinov2_vits14", help="DINO-V2 encoder variant (dinov2_vits14, etc)")
     parser.add_argument("--feature-key", type=str, default="x_norm_patchtokens", choices=["x_norm_patchtokens","x_norm_clstoken"], help="encoder output feature key")
@@ -527,7 +542,7 @@ def main():
     else:
         run_name = f"run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
     # initialize wandb run
-    wandb.init(project="jepa-final3", dir=run_dir, config=vars(args), name=run_name)
+    wandb.init(project="jepa-final5", dir=run_dir, config=vars(args), name=run_name)
     # watch model parameters and gradients in wandb
     wandb.watch(model, log="all", log_freq=100)
     # log dataset size and total trainable parameters to wandb config

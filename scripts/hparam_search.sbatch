@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=a100_short,radiology,a100_long
+#SBATCH --partition=a100_short,radiology,a100_long,gpu4_medium,gpu4_long,gpu8_medium,gpu8_long
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -8,7 +8,7 @@
 #SBATCH --time=3-00:00:00
 #SBATCH --job-name=hcc
 #SBATCH --output=/gpfs/scratch/wz1492/DL25SP-Final-Project/logs/hparam_search_%A_%a.out
-#SBATCH --array=1-10%5
+#SBATCH --array=1-10
 
 # load modules and environment
 module load gcc/8.1.0
@@ -19,29 +19,23 @@ conda activate dino_wm
 seed=$((SLURM_ARRAY_TASK_ID + 1000))
 
 # define ViT size categories
-sizes=(tiny small super_tiny)
+sizes=(tiny super_tiny)
 # randomly choose one size category
 size=${sizes[$((RANDOM % ${#sizes[@]}))]}
 
 # assign hyperparameters based on chosen size
 case $size in
     super_tiny)
-        depth=4
+        depth=2
         heads=4
         dim_head=32
         mlp_dim=512
         ;;
     tiny)
-        depth=12
-        heads=3
-        dim_head=64
-        mlp_dim=768
-        ;;
-    small)
-        depth=12
-        heads=6
-        dim_head=64
-        mlp_dim=1536
+        depth=4
+        heads=4
+        dim_head=32
+        mlp_dim=512
         ;;
 esac
 
@@ -54,8 +48,16 @@ sched_probs=(0.3 0.5 0.7)
 sched_prob=${sched_probs[$((RANDOM % ${#sched_probs[@]}))]}
 
 # define learning rate options and random selection
-lrs=(1e-5 5e-5 1e-4)
-lr=${lrs[$((RANDOM % ${#lrs[@]}))]}
+# Define min and max learning rates
+min_lr=1e-5
+max_lr=1e-4
+
+# Generate a random float between 0 and 1
+rand=$(awk -v seed=$RANDOM 'BEGIN { srand(seed); print rand() }')
+
+# Scale it to the desired range
+lr=$(awk -v r=$rand -v min=$min_lr -v max=$max_lr 'BEGIN { print min + r * (max - min) }')
+
 
 # construct run name from hyperparameters and task ID
 run_name="task${SLURM_ARRAY_TASK_ID}_size-${size}_d${depth}_h${heads}_hd${dim_head}_mlp${mlp_dim}_do${dropout}_sched${sched_prob}_lr${lr}_seed${seed}"
@@ -77,7 +79,7 @@ echo "Task $SLURM_ARRAY_TASK_ID | Size: $size | depth=$depth | heads=$heads | di
 # run training
 python train_jepa.py \
   --data-dir /gpfs/scratch/wz1492/data/train \
-  --epochs 50 \
+  --epochs 15 \
   --batch-size $batch_size \
   --num-hist 16 \
   --lr $lr \

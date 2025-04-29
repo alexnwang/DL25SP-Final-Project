@@ -48,8 +48,8 @@ def load_data(device):
 def load_model(device, args):
     """Load JEPAWrapper from checkpoint and instantiate with provided args."""
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    # infer action_emb_dim from action_encoder conv weight: [out_channels, in_channels, kernel_size]
-    action_emb_dim = checkpoint['action_encoder.weight'].shape[0]
+    # infer action_emb_dim from first linear layer of action_encoder MLP
+    action_emb_dim = checkpoint['action_encoder.0.weight'].shape[0]
     # instantiate JEPAWrapper with training hyperparameters
     model = JEPAWrapper(
         encoder_name=args.encoder_name,
@@ -94,12 +94,12 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Evaluate JEPA model")
     # model checkpoint and hyperparameters
-    parser.add_argument("--checkpoint", type=str, default="jepa_model_small_16hist_no_teacher_forcing.pth", help="path to JEPA model checkpoint")
+    parser.add_argument("--checkpoint", type=str, default="/gpfs/scratch/wz1492/DL25SP-Final-Project/runs/63423646/task5_size-tiny_d4_h4_hd32_mlp512_do0.05_sched0.5_lr5.67774e-05_seed1005/model_epoch_7.pth", help="path to JEPA model checkpoint")
     parser.add_argument("--encoder-name", type=str, default="dinov2_vits14", help="DINO-V2 encoder variant used in training")
     parser.add_argument("--feature-key", type=str, default="x_norm_patchtokens", choices=["x_norm_patchtokens","x_norm_clstoken"], help="encoder feature key used in training")
     parser.add_argument("--num-hist", type=int, default=16, help="history length used in training")
-    parser.add_argument("--predictor-depth", type=int, default=8, help="number of transformer layers in predictor")
-    parser.add_argument("--predictor-heads", type=int, default=8, help="number of attention heads in predictor")
+    parser.add_argument("--predictor-depth", type=int, default=4, help="number of transformer layers in predictor")
+    parser.add_argument("--predictor-heads", type=int, default=4, help="number of attention heads in predictor")
     parser.add_argument("--predictor-dim-head", type=int, default=32, help="dimensionality of each attention head in predictor")
     parser.add_argument("--predictor-mlp-dim", type=int, default=512, help="MLP hidden dimension in predictor")
     parser.add_argument("--predictor-dropout", type=float, default=0.0, help="dropout rate in predictor transformer")

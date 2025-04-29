@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=120GB
-#SBATCH --time=72:00:00
+#SBATCH --time=12:00:00
 #SBATCH --job-name=hcc
 #SBATCH --output=/gpfs/scratch/wz1492/DL25SP-Final-Project/logs/train-%J.log
 #SBATCH --exclude=a100-4020
@@ -21,9 +21,9 @@ conda activate dino_wm
 
 python train_jepa.py \
     --data-dir /gpfs/scratch/wz1492/data/train \
-    --sched-sample-prob 1 \
-    --save-path jepa_model_small_sam_1_mse.pth \
-    --epochs 50 \
+    --output-dir runs/test/ \
+    --sched-sample-prob 0.5 \
+    --epochs 12 \
     --lr 1e-4 \
     --predictor-pool attn \
     --batch-size 32 \
@@ -31,7 +31,5 @@ python train_jepa.py \
 
 
 python main.py \
-    --predictor-pool attn \
-    --checkpoint jepa_model_small_sam_1_mse.pth \
     --predictor-pool attn \
 
