@@ -19,18 +19,12 @@ conda activate dino_wm
 seed=$((SLURM_ARRAY_TASK_ID + 1000))
 
 # define ViT size categories
-sizes=(tiny super_tiny)
+sizes=(tiny)
 # randomly choose one size category
 size=${sizes[$((RANDOM % ${#sizes[@]}))]}
 
 # assign hyperparameters based on chosen size
 case $size in
-    super_tiny)
-        depth=2
-        heads=4
-        dim_head=32
-        mlp_dim=512
-        ;;
     tiny)
         depth=4
         heads=4
@@ -40,11 +34,11 @@ case $size in
 esac
 
 # randomly pick dropout rate
-dropouts=(0.0 0.05)
+dropouts=(0.05)
 dropout=${dropouts[$((RANDOM % ${#dropouts[@]}))]}
 
 # randomly pick scheduled sampling probability
-sched_probs=(0.3 0.5 0.7)
+sched_probs=(0.5)
 sched_prob=${sched_probs[$((RANDOM % ${#sched_probs[@]}))]}
 
 # define learning rate options and random selection
@@ -58,9 +52,31 @@ rand=$(awk -v seed=$RANDOM 'BEGIN { srand(seed); print rand() }')
 # Scale it to the desired range
 lr=$(awk -v r=$rand -v min=$min_lr -v max=$max_lr 'BEGIN { print min + r * (max - min) }')
 
+# Always use VICReg
+vicreg_flag="--vicreg"
+# Define min/max for VICReg coefficients
+min_sim=1.0
+max_sim=25.0
+min_var=1.0
+max_var=25.0
+min_cov=0.01
+max_cov=0.1
+
+# Sample coefficients (similar logic to learning rate)
+rand_sim=$(awk -v seed=$RANDOM 'BEGIN { srand(seed); print rand() }')
+vicreg_sim_coeff=$(awk -v r=$rand_sim -v min=$min_sim -v max=$max_sim 'BEGIN { print min + r * (max - min) }')
+
+rand_var=$(awk -v seed=$RANDOM 'BEGIN { srand(seed); print rand() }')
+vicreg_var_coeff=$(awk -v r=$rand_var -v min=$min_var -v max=$max_var 'BEGIN { print min + r * (max - min) }')
+
+rand_cov=$(awk -v seed=$RANDOM 'BEGIN { srand(seed); print rand() }')
+vicreg_cov_coeff=$(awk -v r=$rand_cov -v min=$min_cov -v max=$max_cov 'BEGIN { print min + r * (max - min) }')
+
+vicreg_args="--vicreg-sim-coeff ${vicreg_sim_coeff} --vicreg-var-coeff ${vicreg_var_coeff} --vicreg-cov-coeff ${vicreg_cov_coeff}"
+vicreg_name="vicreg_s${vicreg_sim_coeff}_v${vicreg_var_coeff}_c${vicreg_cov_coeff}"
 
 # construct run name from hyperparameters and task ID
-run_name="task${SLURM_ARRAY_TASK_ID}_size-${size}_d${depth}_h${heads}_hd${dim_head}_mlp${mlp_dim}_do${dropout}_sched${sched_prob}_lr${lr}_seed${seed}"
+run_name="task${SLURM_ARRAY_TASK_ID}_size-${size}_d${depth}_h${heads}_hd${dim_head}_mlp${mlp_dim}_do${dropout}_sched${sched_prob}_lr${lr}_loss-${vicreg_name}_seed${seed}"
 
 # set batch size based on size
 if [ "$size" = "base" ]; then
@@ -74,7 +90,7 @@ output_dir="/gpfs/scratch/wz1492/DL25SP-Final-Project/runs/${SLURM_JOB_ID}/${run
 mkdir -p $output_dir
 
 # display chosen configuration
-echo "Task $SLURM_ARRAY_TASK_ID | Size: $size | depth=$depth | heads=$heads | dim_head=$dim_head | mlp_dim=$mlp_dim | dropout=$dropout | sched_sample_prob=$sched_prob | lr=$lr | vicreg=$vicreg_name | seed=$seed | Output Dir: $output_dir"
+echo "Task $SLURM_ARRAY_TASK_ID | Size: $size | depth=$depth | heads=$heads | dim_head=$dim_head | mlp_dim=$mlp_dim | dropout=$dropout | sched_sample_prob=$sched_prob | lr=$lr | loss=$vicreg_name | seed=$seed | Output Dir: $output_dir"
 
 # run training
 python train_jepa.py \
@@ -90,5 +106,7 @@ python train_jepa.py \
   --predictor-dropout $dropout \
   --predictor-emb-dropout $dropout \
   --sched-sample-prob $sched_prob \
+  $vicreg_flag \
+  $vicreg_args \
   --run-name $run_name \
   --output-dir ${output_dir} 

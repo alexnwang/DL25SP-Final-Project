@@ -475,6 +475,9 @@ def main():
     )
     parser.add_argument("--no-teacher-forcing", action="store_true", help="Disable teacher forcing (predict current frame instead of next)")
     parser.add_argument("--vicreg", action="store_true", help="Use VICReg loss")
+    parser.add_argument("--vicreg-sim-coeff", type=float, default=1.0, help="VICReg similarity coefficient")
+    parser.add_argument("--vicreg-var-coeff", type=float, default=1.0, help="VICReg variance coefficient")
+    parser.add_argument("--vicreg-cov-coeff", type=float, default=0.01, help="VICReg covariance coefficient")
     parser.add_argument("--sched-sample-prob", type=float, default=1.0, help="Scheduled sampling: probability of using model prediction instead of ground truth for next input")
     parser.add_argument("--output-dir", type=str, required=True, help="Directory to save run outputs (checkpoints, logs, plots)")
     parser.add_argument("--run-name", type=str, default=None, help="Name for wandb run")
@@ -542,7 +545,7 @@ def main():
     else:
         run_name = f"run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
     # initialize wandb run
-    wandb.init(project="jepa-final5", dir=run_dir, config=vars(args), name=run_name)
+    wandb.init(project="jepa-final6", dir=run_dir, config=vars(args), name=run_name)
     # watch model parameters and gradients in wandb
     wandb.watch(model, log="all", log_freq=100)
     # log dataset size and total trainable parameters to wandb config
@@ -574,7 +577,10 @@ def main():
             pred = preds[:,1:]    # (B,T-1,num_patches,embed_dim)
             gold = truth[:,1:]    # (B,T-1,num_patches,embed_dim)
             if args.vicreg:
-                loss = vicreg_loss(pred, gold)
+                loss = vicreg_loss(pred, gold,
+                                     sim_coeff=args.vicreg_sim_coeff,
+                                     var_coeff=args.vicreg_var_coeff,
+                                     cov_coeff=args.vicreg_cov_coeff)
             else:
                 loss = F.mse_loss(pred, gold)
 
