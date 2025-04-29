@@ -29,6 +29,7 @@ os.environ['XDG_CONFIG_HOME'] = os.environ['WANDB_DIR']
 # create directories
 os.makedirs(os.environ['WANDB_DIR'], exist_ok=True)
 os.makedirs(os.environ['WANDB_CONFIG_DIR'], exist_ok=True)
+from pipeline import CheckpointEvalPipeline
 import wandb
 
 # helper functions for learning rate schedule and latent normalization
@@ -555,6 +556,10 @@ def main():
     with open(os.path.join(run_dir, "hyperparams.json"), "w") as f:
         json.dump(vars(args), f, indent=4)
 
+    # Evaluator pipeline
+    pipeline = CheckpointEvalPipeline()
+    pipeline.health_check()
+
     for epoch in range(1, args.epochs + 1):
         total_loss = 0.0
         pbar = tqdm(loader, desc=f"Epoch {epoch}/{args.epochs}")
@@ -602,10 +607,8 @@ def main():
             "train_loss": avg_loss,
             "learning_rate": optimizer.param_groups[0]['lr'],
         }, step=epoch)
-        # save model checkpoint for this epoch
-        epoch_path = os.path.join(run_dir, f"model_epoch_{epoch}.pth")
-        torch.save(model.state_dict(), epoch_path)
-        print(f"Saved JEPA model to {epoch_path}")
+        pipeline.produce_checkpoint(epoch, 
+                                    lambda blob: torch.save(model.state_dict(), blob))
 
     # save final model
     final_save_path = os.path.join(run_dir, "final_checkpoint.pth")

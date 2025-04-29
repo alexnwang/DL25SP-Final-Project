@@ -3,7 +3,9 @@ from evaluator import ProbingEvaluator
 import torch
 import glob
 import argparse
+from pipeline import CheckpointEvalPipeline
 from train_jepa import JEPAWrapper
+import wandb
 
 
 def get_device():
@@ -87,8 +89,10 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
 
     avg_losses = evaluator.evaluate_all(prober=prober)
 
+    logs = {}
     for probe_attr, loss in avg_losses.items():
-        print(f"{probe_attr} loss: {loss}")
+        logs[f"{probe_attr} loss"]= loss
+    wandb.logs(logs)
 
 
 if __name__ == "__main__":
@@ -106,7 +110,12 @@ if __name__ == "__main__":
     parser.add_argument("--predictor-emb-dropout", type=float, default=0.0, help="dropout on predictor input embeddings")
     parser.add_argument("--predictor-pool", type=str, default="attn", choices=["cls","mean","attn"], help="predictor pool used in training (mean, cls, attn)")
     args = parser.parse_args()
-    device = get_device()
+    device = get_device() 
+
+    pipeline = CheckpointEvalPipeline()
+    pipeline.health_check()
+
+    pipeline.subscribe_checkpoint(lambda checkpoint_path: args.update({"checkpoint": checkpoint_path}))
     model = load_model(device, args)
     
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
