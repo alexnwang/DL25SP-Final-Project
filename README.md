@@ -165,3 +165,55 @@ There will be a total of **four** evaluation settings for this project. However,
 ### Submission
 Details to come.
 
+=======
+#### Format
+
+Create the zipped version of following folder for submission:
+
+```
+DL25SP-Final-Project/    
+├── main.py    
+├── evaluator.py    
+├── ... (other files including your new ones)    
+├── model_weights.pth  
+├── requirements.txt  
+├── metrics.txt     
+└── team_name.txt  
+```
+
+Make sure `main.py` is runnable with your trained model, including python command load your model weights. 
+
+If your code requires additional packages, add them to `requirements.txt`. No need to include `torch` unless your code requires a specific version.
+
+metrics.txt contains 5 lines - 
+```
+probe_normal val loss: {your loss}
+probe_wall val loss: {your loss}
+{hidden_eval_1} val loss: {your loss}
+{hidden_eval_2} val loss: {your loss}
+# number of trainable parameters of your model
+# training command to replicate your submitted model
+```
+*The hidden evaluation benchmarks will be made available closer to the deadline.*
+
+team_name.txt contains your team number, members' NETIDs and an optional team name.
+
+Upload the zipped file to any cloud storage and email the download link to TA anw2067@nyu.edu with subject line **"DL Final Project Submission. Team Number {Team Number}"**. 
+
+#### Requirements
+
+The TA should be able to execute the following commands to validate your submission:
+
+1. Download the file directly or `wget {link}`
+2. Unzip the folder
+3. Install dependencies: `pip install -r requirements.txt` (if applicable)
+4. Run the evaluation script: `python main.py`
+5. Run the training script given in `metrics.txt`
+
+If the evaluation script or training script fails to execute correctly on the first try, your team's rank will be reduced by 3 positions.
+
+Every subsequent failure after follow-up with the team will result in an additonal reduction of 3 positions. With maximum of 3 attempts. After that team gets placed on the bottom rank.
+
+It is recommended to test your submission on a clean environment before submitting to ensure all required dependencies are included and that your scripts run as expected.
+
+**Submission deadline is 05/02 11:59PM**. Winners will be picked and asked to present their work on last class day 05/05.
