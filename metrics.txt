@@ -1,0 +1,6 @@
+normal loss: 258.4679260253906
+wall loss: 186.3979034423828
+{hidden_eval_1} val loss: {your loss}
+{hidden_eval_2} val loss: {your loss}
+# number of trainable parameters of your model
+# training command to replicate your submitted model
