@@ -49,7 +49,7 @@ def load_model():
     from models import JEPA
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = JEPA()
-    model.load_state_dict(torch.load('model_weights.pth', map_location=device))
+    model.load_state_dict(torch.load('model_weights_epoch1.pth', map_location=device))
     model = model.to(device)
     model.eval()
     return model
