@@ -22,7 +22,7 @@ lr          = 3e-4
 epochs      = 5
 batch_size  = 32
 alpha       = 1.0
-beta        = 0.1
+beta        = 0.01
 temperature = 0.1
 momentum    = 0.999
 
